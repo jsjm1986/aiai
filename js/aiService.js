@@ -417,7 +417,7 @@ class AIService {
                         "id": "唯一ID",
                         "name": "姓名",
                         "age": number,
-                        "occupation": "职��",
+                        "occupation": "职",
                         "income": "收入水平",
                         "education": "教育水平",
                         "familyId": "家庭ID",
@@ -630,7 +630,8 @@ class AIService {
     static async getDecision(context) {
         try {
             // 1. 检查是否有紧急需求，如果有直接返回默认决策
-            if (context.agent.checkUrgentNeeds()) {
+            const urgentNeed = context.agent.checkUrgentNeed();
+            if (urgentNeed) {
                 return this.getDefaultDecision(context);
             }
 
@@ -865,7 +866,7 @@ class AIService {
             输出格式必须是JSON：
             {
                 "content": {
-                    "speaker": ["说话内容1", "说话内容2"],
+                    "speaker": ["说���内容1", "说话内容2"],
                     "listener": ["回应内容1", "回应内容2"]
                 },
                 "topic": "对话主题",
@@ -913,7 +914,7 @@ class AIService {
                         speaker: ["你好，今天工作还顺利吗？", "最近天气不错，适合出来走走。"],
                         listener: ["挺好的，谢谢关心。", "是啊，难得有这么好的天气。"]
                     },
-                    topic: "日常��暄",
+                    topic: "日常暄",
                     mood: "友好",
                     impact: 0.1
                 };

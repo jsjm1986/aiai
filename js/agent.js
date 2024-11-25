@@ -82,7 +82,7 @@ class AIAgent {
         this.locations = {
             home: null,      // 住所位置
             workplace: null, // 工作地点
-            current: position // 当前位置
+            current: position // ���前位置
         };
 
         // 修改行为控制系统
@@ -124,7 +124,7 @@ class AIAgent {
                 fatigue: 0.2       // 每分钟增加0.2%的疲劳度
             },
             emotional: {
-                happiness: -0.1,   // 每分钟降低0.1%的心情
+                happiness: -0.1,   // 每��钟降低0.1%的心情
                 stress: 0.15,      // 每分钟增加0.15%的压力
                 satisfaction: -0.1  // 每分钟降低0.1%的满意度
             },
@@ -142,6 +142,122 @@ class AIAgent {
             failed: [],    // 失败的行为
             current: null, // 当前行为
             lastUpdate: Date.now()
+        };
+
+        // 添加状态管理器
+        this.stateManager = new StateManager(this);
+
+        // 1. 完善决策缓存机制
+        this.decisionCache = {
+            cache: new Map(),
+            maxSize: 100,
+            ttl: 30000, // 缓存有效期30秒
+            
+            // 添加缓存
+            set(key, decision) {
+                if (this.cache.size >= this.maxSize) {
+                    this.cleanup();
+                }
+                this.cache.set(key, {
+                    decision,
+                    timestamp: Date.now()
+                });
+            },
+            
+            // 获取缓存
+            get(key) {
+                const cached = this.cache.get(key);
+                if (!cached) return null;
+                
+                if (Date.now() - cached.timestamp > this.ttl) {
+                    this.cache.delete(key);
+                    return null;
+                }
+                
+                return cached.decision;
+            },
+            
+            // 清理过期缓存
+            cleanup() {
+                const now = Date.now();
+                for (const [key, value] of this.cache.entries()) {
+                    if (now - value.timestamp > this.ttl) {
+                        this.cache.delete(key);
+                    }
+                }
+            },
+            
+            // 生成缓存键
+            generateKey(context) {
+                return JSON.stringify({
+                    location: context.currentLocation,
+                    timeOfDay: context.timeOfDay,
+                    physicalState: {
+                        energy: Math.round(this.state.physical.energy / 10) * 10,
+                        hunger: Math.round(this.state.physical.hunger / 10) * 10
+                    },
+                    emotionalState: {
+                        stress: Math.round(this.state.emotional.stress / 10) * 10,
+                        happiness: Math.round(this.state.emotional.happiness / 10) * 10
+                    },
+                    socialState: {
+                        socialNeeds: Math.round(this.state.social.socialNeeds / 10) * 10
+                    }
+                });
+            }
+        };
+
+        // 2. 添加决策优先级系统
+        this.decisionPriority = {
+            // 定义优先级规则
+            rules: {
+                urgent: {
+                    energy: (value) => value < 20 ? 5 : 0,
+                    hunger: (value) => value > 80 ? 4 : 0,
+                    stress: (value) => value > 80 ? 3 : 0,
+                    socialNeeds: (value) => value > 80 ? 2 : 0
+                },
+                scheduled: {
+                    work: 4,
+                    eat: 3,
+                    rest: 2,
+                    socialize: 1
+                },
+                opportunity: {
+                    socializing: 2,
+                    entertainment: 1
+                }
+            },
+
+            // 计算决策优先级
+            calculate(decision, state) {
+                let priority = 0;
+                
+                // 检查紧急需求
+                priority += this.rules.urgent.energy(state.physical.energy);
+                priority += this.rules.urgent.hunger(state.physical.hunger);
+                priority += this.rules.urgent.stress(state.emotional.stress);
+                priority += this.rules.urgent.socialNeeds(state.social.socialNeeds);
+                
+                // 检查计划活���
+                if (decision.isScheduled) {
+                    priority += this.rules.scheduled[decision.action] || 0;
+                }
+                
+                // 检查机会性活动
+                if (decision.isOpportunity) {
+                    priority += this.rules.opportunity[decision.action] || 0;
+                }
+                
+                return priority;
+            },
+
+            // 比较两个决策的优先级
+            compare(decision1, decision2, state) {
+                const priority1 = this.calculate(decision1, state);
+                const priority2 = this.calculate(decision2, state);
+                return priority2 - priority1;
+            }
         };
     }
 
@@ -207,10 +323,10 @@ class AIAgent {
             systemPrompt
         });
 
-        // 更新个化属性
+        // 更新个化性
         Object.assign(this.personality, personality);
 
-        // 生成日常作息安排
+        // 生成日常作息安��
         const schedule = await AIService.generateDailySchedule({
             id: this.id,
             occupation: this.occupation,
@@ -226,23 +342,6 @@ class AIAgent {
     }
 
     async think() {
-        const now = Date.now();
-        
-        // 检查思考冷却时间
-        if (now - this.behaviorControl.lastThinkTime < this.behaviorControl.thinkInterval) {
-            return null;
-        }
-
-        // 如果正在执行行动或移动，不进行思考
-        if (this.behaviorControl.isActing || this.behaviorControl.isMoving) {
-            return null;
-        }
-
-        // 如果在行动冷却中，不进行思考
-        if (now - this.behaviorControl.lastActionTime < this.behaviorControl.actionCooldown) {
-            return null;
-        }
-
         try {
             // 检查紧急需求
             const urgentNeed = this.checkUrgentNeeds();
@@ -252,38 +351,29 @@ class AIAgent {
                     type: 'thought',
                     content: `发现紧急需求: ${urgentNeed.type}`,
                     reason: `${urgentNeed.reason}, 优先级: ${urgentNeed.priority}`,
-                    time: now,
-                    location: this.getCurrentLocationName()
+                    time: Date.now()
                 });
 
-                // 更新最后思考时间
-                this.behaviorControl.lastThinkTime = now;
-
+                // 直接处理紧急需求
                 return this.handleUrgentNeed(urgentNeed);
             }
 
-            // 获取
+            // 获取决策
             const context = {
                 agent: {
                     id: this.id,
                     occupation: this.occupation,
                     personality: this.personality,
                     currentState: this.state,
-                    currentLocation: this.getCurrentLocationName(),
-                    history: {
-                        recentActions: this.memory.shortTerm
-                            .filter(m => m.type === 'action')
-                            .slice(-5)
-                    }
+                    currentLocation: this.getCurrentLocationName()
                 },
                 environment: {
                     nearbyBuildings: this.getNearbyBuildings(),
                     nearbyAgents: this.getNearbyAgents(),
-                    timeOfDay: this.timeTracking.gameTime.getHours(),
-                    weather: this.getCurrentWeather()
+                    timeOfDay: this.timeTracking.gameTime.getHours()
                 }
             };
-            
+
             const decision = await AIService.getDecision(context);
             
             if (decision) {
@@ -293,12 +383,8 @@ class AIAgent {
                     action: decision.action,
                     target: decision.target,
                     reason: decision.reason,
-                    time: now,
-                    location: this.getCurrentLocationName()
+                    time: Date.now()
                 });
-
-                // 更新最后思考时间
-                this.behaviorControl.lastThinkTime = now;
             }
 
             return decision;
@@ -349,103 +435,135 @@ class AIAgent {
     }
 
     async executeAction(action) {
+        // 使用状态管理器切换状态
+        const success = await this.stateManager.changeState({
+            type: 'acting',
+            action: action.action,
+            startTime: Date.now(),
+            duration: this.getActionDuration(action.action)
+        });
+
+        if (!success) {
+            return false;
+        }
+
         const now = Date.now();
-
-        // 检查行动冷却时间
-        if (now - this.behaviorControl.lastActionTime < this.behaviorControl.actionCooldown) {
-            const remainingTime = (this.behaviorControl.actionCooldown - 
-                (now - this.behaviorControl.lastActionTime)) / 1000;
-            console.log(`代理 ${this.id} 行动冷却中，剩余时间: ${remainingTime.toFixed(3)}秒`);
-            return false;
-        }
-
-        // 如果正在执行行动或移动，不执行新行动
-        if (this.behaviorControl.isActing || this.behaviorControl.isMoving) {
-            // 记录失败的行为，包含完整信息
-            this.recordAction({
-                action: action.action || 'unknown',
-                target: action.target,
-                reason: `无法执行行动: 正在${this.behaviorControl.isMoving ? '移动' : 
-                    (this.behaviorControl.currentAction ? `执行${this.behaviorControl.currentAction}` : '其他行动')}`
-            }, 'failed', {
-                error: '代理正忙',
-                currentState: {
-                    isMoving: this.behaviorControl.isMoving,
-                    currentAction: this.behaviorControl.currentAction
-                }
-            });
-
-            console.log(`代理 ${this.id} 无法执行行动: 正在执行其他行动`);
-            return false;
-        }
-
         try {
-            // 确保action对象包含所有必要的字段
-            const safeAction = {
-                action: action.action || 'unknown',
-                target: action.target || null,
-                reason: action.reason || '无原因',
-                location: action.location || this.getCurrentLocationName()
-            };
+            // 2. 规范化行为对象
+            const normalizedAction = this.normalizeAction(action);
+            
+            // 3. 设置行动状态前先重置
+            this.resetBehaviorState();
+            
+            // 4. 设置新的行动状态
+            this.setActionState(normalizedAction);
 
-            // 设置行动状态
-            this.behaviorControl.isActing = true;
-            this.behaviorControl.currentAction = safeAction.action;
-            this.behaviorControl.actionStartTime = now;
+            // 5. 执行行动
+            const result = await this.performAction(normalizedAction);
 
-            // 设置当前行为
-            this.actionHistory.current = {
-                type: safeAction.action,
-                target: safeAction.target,
-                reason: safeAction.reason,
-                startTime: now,
-                location: safeAction.location
-            };
-
-            // 执行行动
-            const result = await this.performAction(safeAction);
-
-            // 记录成功的行为
+            // 6. 记录结果
             if (result) {
-                this.recordAction(safeAction, 'completed', {
-                    energyChange: -10,
-                    stressChange: -5,
-                    happinessChange: 10,
-                    socialChange: safeAction.action === 'socialize' ? -30 : 5
-                });
+                this.recordActionSuccess(normalizedAction);
+            } else {
+                this.recordActionFailure(normalizedAction, '行动执行失败');
             }
 
             return result;
 
         } catch (error) {
-            // 记录失败的行为
-            this.recordAction(action, 'failed', {
-                error: error.message,
-                errorType: error.name,
-                errorStack: error.stack
-            });
-
-            console.error(`代理 ${this.id} 执行行动失败:`, error);
+            this.handleActionError(action, error);
             return false;
-
         } finally {
-            // 清理行动状态
-            this.resetBehaviorState();
-            // 更新最后行动时间
+            // 7. 清理状态并设置冷却时间
+            this.cleanupActionState();
             this.behaviorControl.lastActionTime = now;
+            this.behaviorControl.actionCooldown = 5000; // 5秒冷却���间
         }
     }
 
-    resetBehaviorState() {
-        const previousState = {
-            isActing: this.behaviorControl.isActing,
-            isMoving: this.behaviorControl.isMoving,
-            currentAction: this.behaviorControl.currentAction
+    canExecuteAction() {
+        // 检查否可以执行新行动
+        if (this.behaviorControl.isActing || this.behaviorControl.isMoving) {
+            return false;
+        }
+
+        // 检查冷却时间
+        const now = Date.now();
+        if (now - this.behaviorControl.lastActionTime < this.behaviorControl.actionCooldown) {
+            return false;
+        }
+
+        // 检查行为锁定
+        if (this.actionLock.isLocked) {
+            return false;
+        }
+
+        return true;
+    }
+
+    getBlockingReason() {
+        if (this.behaviorControl.isActing) {
+            return `正在执行${this.behaviorControl.currentAction}`;
+        }
+        if (this.behaviorControl.isMoving) {
+            return '正在移动';
+        }
+        if (this.actionLock.isLocked) {
+            return this.actionLock.lockReason;
+        }
+        return '未知原因';
+    }
+
+    normalizeAction(action) {
+        return {
+            action: action.action || 'unknown',
+            target: action.target || null,
+            reason: action.reason || '无原因',
+            location: action.location || this.getCurrentLocationName(),
+            startTime: Date.now(),
+            duration: this.getActionDuration(action.action)
+        };
+    }
+
+    setActionState(action) {
+        // 确保所有字段都有值
+        const safeAction = {
+            type: action.action || 'unknown',
+            target: action.target || null,
+            reason: action.reason || '无原因',
+            startTime: Date.now(),
+            location: action.location || this.getCurrentLocationName(),
+            duration: this.getActionDuration(action.action)
         };
 
-        // 重置所有行为状态
+        // 设置行为控制状态
+        this.behaviorControl.isActing = true;
+        this.behaviorControl.currentAction = safeAction.type;
+        this.behaviorControl.actionStartTime = safeAction.startTime;
+        this.behaviorControl.actionDuration = safeAction.duration;
+
+        // 设置当前行为记录
+        this.actionHistory.current = safeAction;
+
+        console.log(`代理 ${this.id} 开始新行为:`, {
+            类型: safeAction.type,
+            目标: safeAction.target,
+            原因: safeAction.reason,
+            位置: safeAction.location,
+            持续时间: safeAction.duration
+        });
+    }
+
+    cleanupActionState() {
+        // 记录之前的状态
+        const previousState = {
+            isActing: this.behaviorControl.isActing,
+            currentAction: this.behaviorControl.currentAction,
+            actionStartTime: this.behaviorControl.actionStartTime
+        };
+
+        // 完全重置状态
         this.behaviorControl.isActing = false;
-        this.behaviorControl.isMoving = false;
         this.behaviorControl.currentAction = null;
         this.behaviorControl.actionStartTime = null;
         this.behaviorControl.actionDuration = null;
@@ -453,12 +571,10 @@ class AIAgent {
         // 清除当前行为记录
         this.actionHistory.current = null;
 
-        // 记录状态变化
-        console.log(`代理 ${this.id} 状态重置:`, {
-            之前状态: previousState,
-            当前状态: {
+        console.log(`代理 ${this.id} 状态已重置:`, {
+            之前: previousState,
+            现在: {
                 isActing: false,
-                isMoving: false,
                 currentAction: null
             }
         });
@@ -491,7 +607,7 @@ class AIAgent {
         const baseDurations = {
             work: 120000,      // 2分钟 - 代表一个工作周期
             rest: 90000,       // 1.5分钟 - 代表一次休息时间
-            eat: 60000,        // 1分钟 - 代表一顿饭的时间
+            eat: 60000,        // 1分钟 - 代表一顿饭的时
             socialize: 180000, // 3分钟 - 代表一次社交活动
             entertainment: 150000  // 2.5分钟 - 代表一次娱乐活动
         };
@@ -526,102 +642,61 @@ class AIAgent {
     }
 
     getStateAdjustment() {
-        // 根据代理当前状态调整行为持续时间
+        // 根据代理���前状态调���行为持续时间
         const energyFactor = this.state.physical.energy / 100;  // 体力越低，行动越慢
         const stressFactor = 1 - (this.state.emotional.stress / 200); // 压力越大，行动越慢
         
-        // 综合考虑各种因素
+        // 综考虑各种因素
         return (energyFactor + stressFactor) / 2;
     }
 
     async performAction(action) {
         try {
-            // 检查是否已经在执行行动
-            if (this.behaviorControl.isActing) {
-                throw new Error(`正在执行${this.behaviorControl.currentAction}`);
+            // 1. 首先验证action对象
+            if (!action || !action.action) {
+                throw new Error('无效的行动对象');
             }
 
-            // 设置行动状态
-            this.behaviorControl.isActing = true;
-            this.behaviorControl.currentAction = action.action;
-            this.behaviorControl.actionStartTime = Date.now();
+            // 2. 检查当前状态，允许同类型行为继续执行
+            if (this.behaviorControl.isActing && 
+                this.behaviorControl.currentAction !== action.action) {
+                throw new Error(`正在执行${this.behaviorControl.currentAction || 'unknown'}`);
+            }
 
-            // 获取行动持续时间
-            const duration = action.duration || this.getActionDuration(action.action);
-            
-            // 创建行动执行Promise
-            const actionPromise = new Promise(async (resolve) => {
-                // 记录开始行动
-                console.log(`代理 ${this.id} 开始执行行动:`, {
-                    类型: action.action,
-                    目标: action.target,
-                    持续时间: duration,
-                    原因: action.reason
-                });
+            // 3. 执行具体行动
+            let result = false;
+            switch (action.action) {
+                case 'work':
+                    result = await this.performWork(action);
+                    break;
+                case 'rest':
+                    result = await this.performRest(action);
+                    break;
+                case 'socialize':
+                    result = await this.performSocialize(action);
+                    break;
+                case 'entertainment':
+                    result = await this.performEntertainment(action);
+                    break;
+                case 'relax':
+                    result = await this.performRelax(action);
+                    break;
+                default:
+                    // 默认行为等待指定时间
+                    await new Promise(r => setTimeout(r, Math.min(action.duration || 30000, 30000)));
+                    result = true;
+            }
 
-                // 执行具体行动
-                switch (action.action) {
-                    case 'work':
-                        await this.performWork(action);
-                        break;
-                    case 'rest':
-                        await this.performRest(action);
-                        break;
-                    case 'socialize':
-                        await this.performSocialize(action);
-                        break;
-                    case 'entertainment':
-                        await this.performEntertainment(action);
-                        break;
-                    default:
-                        // 默认行为等待指定时间
-                        await new Promise(r => setTimeout(r, Math.min(duration, 30000)));
-                }
-
-                resolve(true);
-            });
-
-            // 创建超时Promise
-            const timeoutPromise = new Promise((_, reject) => {
-                setTimeout(() => {
-                    reject(new Error(`行动执行超时: ${action.action}`));
-                }, Math.min(duration * 1.5, this.behaviorControl.actionTimeout)); // 使用1.5倍行动时间或最大超时时间
-            });
-
-            // 等待行动完成或超时
-            const result = await Promise.race([actionPromise, timeoutPromise]);
-
-            // 如果行动成功完成，更新状态
+            // 4. 如果行动成功，更新状态
             if (result) {
                 this.updateStateAfterAction(action.action);
-                
-                // 记录成功的行为
-                this.recordAction(action, 'completed', {
-                    energyChange: -10,
-                    stressChange: -5,
-                    happinessChange: 10,
-                    socialChange: action.action === 'socialize' ? -30 : 5
-                });
             }
 
             return result;
 
         } catch (error) {
             console.error(`代理 ${this.id} 执行行动失败:`, error);
-            
-            // 记录失败的行为
-            this.recordAction(action, 'failed', {
-                error: error.message,
-                errorType: error.name,
-                errorStack: error.stack
-            });
-            
             return false;
-        } finally {
-            // 清理行动状态
-            this.behaviorControl.isActing = false;
-            this.behaviorControl.currentAction = null;
-            this.behaviorControl.actionStartTime = null;
         }
     }
 
@@ -635,64 +710,84 @@ class AIAgent {
 
     async performRest(decision) {
         const duration = decision.duration || 15000; // 默认休息15秒
-        console.log(`代 ${this.id} 开始休息，预计持续 ${duration/1000} 秒`);
+        console.log(`代 ${this.id} ���始休�������，���������计持续 ${duration/1000} 秒`);
         await new Promise(resolve => setTimeout(resolve, duration));
         this.state.physical.energy += 30;
         this.state.emotional.stress -= 15;
     }
 
-    async performSocialize(decision) {
+    async performSocialize(action) {
         try {
-            // 寻找附近的代理
-            const nearbyAgents = this.getNearbyAgents();
-            if (nearbyAgents.length === 0) {
-                this.addToMemory({
-                    type: 'interaction',
-                    content: '未找到可交互的代理',
-                    time: Date.now(),
-                    location: this.getCurrentLocationName()
-                });
-                return;
+            // 1. 先重置状态，确保没有其他行为在执行
+            this.resetBehaviorState();
+
+            // 2. 检查当前位置是否适合社交
+            const currentLocation = this.getCurrentLocationName();
+            const building = this.city.buildings.get(action.target);
+            
+            if (!building || !building.functions?.includes('socialize')) {
+                console.log(`代理 ${this.id} 当前位置不适合社交:`, currentLocation);
+                return false;
             }
 
-            // 选择一个代理进行互动
+            // 3. 寻找附近的代理
+            const nearbyAgents = await BehaviorSystem.findSocialPartners(this);
+            if (nearbyAgents.length === 0) {
+                console.log(`代理 ${this.id} 未找到可交互的代理`);
+                return false;
+            }
+
+            // 4. 选择一个社交对象
             const targetAgent = nearbyAgents[0];
-            
-            // 生成对话内容
-            const conversation = await AIService.generateConversation({
-                agent1: this,
-                agent2: targetAgent,
-                environment: {
-                    location: this.getCurrentLocationName(),
-                    time: new Date(),
-                    nearbyAgents: nearbyAgents.length
-                }
-            });
+            console.log(`代理 ${this.id} 选与代理 ${targetAgent.id} 进行社交`);
 
-            // 记录社交互动
-            this.addToMemory({
-                type: 'conversation',
-                partnerId: targetAgent.id,
-                content: conversation.content,
-                topic: conversation.topic,
-                mood: conversation.mood,
-                impact: conversation.impact,
-                time: Date.now(),
-                location: this.getCurrentLocationName()
-            });
+            // 5. 设置社交状态
+            this.behaviorControl.isActing = true;
+            this.behaviorControl.currentAction = 'socialize';
+            this.behaviorControl.actionStartTime = Date.now();
+            this.behaviorControl.actionDuration = this.getActionDuration('socialize');
 
-            // 新社交关系
-            this.updateRelationship(targetAgent.id, conversation.impact);
+            // 6. 生成并执行社交互动
+            const interaction = await BehaviorSystem.executeSocialInteraction(
+                this, 
+                targetAgent,
+                building
+            );
+
+            // 7. 记录社交结果
+            if (interaction) {
+                // 更新社交需求
+                this.state.social.socialNeeds = Math.max(0, 
+                    this.state.social.socialNeeds - 30);
+                
+                // 更新情绪状态
+                this.state.emotional.happiness += 10;
+                this.state.emotional.stress -= 5;
+
+                // 记录成功的社交
+                this.recordAction({
+                    action: 'socialize',
+                    target: targetAgent.id,
+                    location: currentLocation,
+                    reason: '社交需求',
+                    impact: {
+                        socialNeeds: -30,
+                        happiness: +10,
+                        stress: -5
+                    }
+                }, 'completed');
+
+                return true;
+            }
+
+            return false;
 
         } catch (error) {
-            console.error(`代理 ${this.id} 社交互动失败:`, error);
-            this.addToMemory({
-                type: 'error',
-                content: '社交互动失败',
-                error: error.message,
-                time: Date.now(),
-                location: this.getCurrentLocationName()
-            });
+            console.error(`代理 ${this.id} 社交行为执行失败:`, error);
+            return false;
+        } finally {
+            // 8. 清理状态
+            this.resetBehaviorState();
         }
     }
 
@@ -705,42 +800,55 @@ class AIAgent {
     }
 
     async moveTo(targetPosition) {
-        if (!targetPosition) {
-            console.warn(`代理 ${this.id} 移动目标位置无效`);
-            return false;
-        }
-
         try {
-            // 设置当前行为为移动
-            this.actionHistory.current = {
-                type: 'move',
-                target: `(${Math.round(targetPosition.x)}, ${Math.round(targetPosition.z)})`,
-                reason: '前往目标位置',
-                startTime: Date.now(),
-                location: this.getCurrentLocationName()
-            };
+            // 1. 先重置状态
+            this.resetBehaviorState();
+            
+            // 2. 设置移动状态
+            this.behaviorControl.isMoving = true;
+            this.behaviorControl.currentAction = 'move';
+            this.behaviorControl.actionStartTime = Date.now();
+            
+            console.log(`代理 ${this.id} 开始移动到`, targetPosition);
 
-            // 执行移动
-            const moveResult = await this.behavior.moveToPosition(targetPosition);
+            // 3. 计算路径并移动
+            const result = await this.behavior.moveToPosition(targetPosition);
 
-            if (moveResult) {
-                console.log(`代理 ${this.id} 移动成功:`, targetPosition);
-                // 更新位置
-                this.position = {...targetPosition};
-                return true;
+            // 4. 记录移动结果
+            if (result) {
+                this.recordAction({
+                    action: 'move',
+                    target: targetPosition,
+                    reason: '前往目标位置'
+                }, 'completed');
             } else {
-                console.log(`代理 ${this.id} 移动失败`);
-                return false;
+                this.recordAction({
+                    action: 'move',
+                    target: targetPosition,
+                    reason: '前往目标位置'
+                }, 'failed', {
+                    error: '移动失败',
+                    errorType: 'MovementFailed'
+                });
             }
+
+            return result;
 
         } catch (error) {
             console.error(`代理 ${this.id} 移动失败:`, error);
+            this.recordAction({
+                action: 'move',
+                target: targetPosition,
+                reason: '前往目标位置'
+            }, 'failed', {
+                error: error.message,
+                errorType: error.name,
+                errorStack: error.stack
+            });
             return false;
         } finally {
-            // 移动完成后清除当前行为
-            this.actionHistory.current = null;
-            this.behaviorControl.isMoving = false;
-            this.behaviorControl.actionStartTime = null;
+            // 5. 清理移动状态
+            this.resetBehaviorState();
         }
     }
 
@@ -784,7 +892,7 @@ class AIAgent {
     }
 
     getNearbyAgents() {
-        // 这个方法应该由��市系统调用来获取附近的其他代理
+        // 这个方法应该由城市系统调用来获取附近的其他代理
         return [];
     }
 
@@ -909,9 +1017,89 @@ class AIAgent {
         });
     }
 
-    getRelevantMemories() {
-        // 获取与当前情境相关的记忆
-        return [...this.memory.shortTerm, ...this.memory.experiences.slice(-5)];
+    getRelevantMemories(context) {
+        const relevantMemories = {
+            recent: [],      // 最近的相关记忆
+            important: [],   // 重要的相关记忆
+            emotional: [],   // 情感相关的记忆
+            location: [],    // 地点相关的记忆
+            social: []       // 社交相关的记忆
+        };
+
+        const now = Date.now();
+        const locationName = this.getCurrentLocationName();
+
+        // 搜索所有记忆
+        [...this.memory.shortTerm, ...this.memory.experiences].forEach(memory => {
+            // 计算记忆的相关性分数
+            const relevanceScore = this.calculateMemoryRelevance(memory, context);
+            
+            if (relevanceScore > 0.5) { // 相关性阈值
+                // 根据记忆类型分类
+                if (now - memory.time < 3600000) { // 1小时内
+                    relevantMemories.recent.push({...memory, relevance: relevanceScore});
+                }
+                if (memory.importance > 0.7) {
+                    relevantMemories.important.push({...memory, relevance: relevanceScore});
+                }
+                if (memory.type === 'emotional' || memory.emotionalImpact > 0.5) {
+                    relevantMemories.emotional.push({...memory, relevance: relevanceScore});
+                }
+                if (memory.location === locationName) {
+                    relevantMemories.location.push({...memory, relevance: relevanceScore});
+                }
+                if (memory.type === 'social' || memory.type === 'interaction') {
+                    relevantMemories.social.push({...memory, relevance: relevanceScore});
+                }
+            }
+        });
+
+        // 对每个类别的记忆按相关性排序并限制数量
+        Object.keys(relevantMemories).forEach(key => {
+            relevantMemories[key] = relevantMemories[key]
+                .sort((a, b) => b.relevance - a.relevance)
+                .slice(0, 5);
+        });
+
+        return relevantMemories;
+    }
+
+    calculateMemoryRelevance(memory, context) {
+        let relevance = 0;
+
+        // 时间相关性（最近的记忆更相关）
+        const ageInHours = (Date.now() - memory.time) / (60 * 60 * 1000);
+        const timeRelevance = Math.max(0, 1 - (ageInHours / 24)); // 24小时内的记忆最相关
+        relevance += timeRelevance * 0.3;
+
+        // 位置相关性
+        if (memory.location === context.currentLocation) {
+            relevance += 0.3;
+        }
+
+        // 情感状态相关性
+        if (memory.emotionalImpact) {
+            const emotionalStateMatch = 
+                (memory.emotionalImpact > 0 && this.state.emotional.happiness > 70) ||
+                (memory.emotionalImpact < 0 && this.state.emotional.stress > 70);
+            if (emotionalStateMatch) {
+                relevance += 0.2;
+            }
+        }
+
+        // 社交相关性
+        if (memory.type === 'social' && context.socialContext) {
+            if (memory.partnerId === context.socialContext.partnerId) {
+                relevance += 0.4;
+            }
+        }
+
+        // 活动相关性
+        if (memory.action === context.currentAction) {
+            relevance += 0.2;
+        }
+
+        return Math.max(0, Math.min(1, relevance));
     }
 
     updateState(action) {
@@ -961,7 +1149,7 @@ class AIAgent {
         // 记录显著状态变化
         if (this.hasSignificantStateChange()) {
             this.addThought('状态发生显著变化', 
-                `体力: ${Math.round(this.state.physical.energy)}%, ` +
+                `力: ${Math.round(this.state.physical.energy)}%, ` +
                 `压: ${Math.round(this.state.emotional.stress)}%, ` +
                 `社交需求: ${Math.round(this.state.social.socialNeeds)}%`);
         }
@@ -1017,7 +1205,7 @@ class AIAgent {
     }
 
     addToMemory(experience) {
-        // 确保记忆系统已初始化
+        // 确记忆系统已初始化
         if (!this.memory.shortTerm) this.memory.shortTerm = [];
         if (!this.memory.experiences) this.memory.experiences = [];
 
@@ -1250,201 +1438,190 @@ class AIAgent {
         console.log(`代理 ${this.id} 正在处理紧急需求:`, need);
 
         try {
-            // 检查是否已经在处理同样的需求
-            if (this.actionHistory.current && 
-                this.actionHistory.current.type === need.type) {
-                console.log(`代理 ${this.id} 已经在处理 ${need.type} 需求`);
+            // 1. 验证求的紧急程度
+            const urgencyLevel = this.validateUrgency(need);
+            if (urgencyLevel < 3) { // 紧急程度不够
+                return this.handleNonUrgentNeed(need);
+            }
+
+            // 2. 检查当前状态
+            if (!this.canHandleNewNeed(need)) {
                 return null;
             }
 
-            // 检查行为冷却时间
-            const now = Date.now();
-            if (now - this.behaviorControl.lastActionTime < this.behaviorControl.actionCooldown) {
-                console.log(`代理 ${this.id} 行为冷却中，跳过需求处理`);
-                return null;
+            // 3. 寻找满足需求的建筑物
+            const buildings = await this.findSuitableBuildings(need);
+            if (buildings.length === 0) {
+                return this.handleNoSuitableBuilding(need);
             }
 
-            // 寻找合适的建筑物
-            const targetBuilding = this.findBuildingForNeed(need);
-            if (!targetBuilding) {
-                // 记录失败原因
-                this.recordAction({
-                    action: need.type,
-                    target: null,
-                    reason: need.reason
-                }, 'failed', {
-                    error: '未到合适的建筑物',
-                    errorType: 'NoSuitableBuilding'
-                });
-                
-                // 设置较长的冷却时间，避免立即重试
-                this.behaviorControl.lastActionTime = now;
-                this.behaviorControl.actionCooldown = 10000; // 10秒
-                
-                return null;
-            }
+            // 4. 评估每个建筑物的适合度
+            const evaluatedBuildings = buildings.map(building => ({
+                building,
+                score: this.evaluateBuildingSuitability(building, need)
+            })).sort((a, b) => b.score - a.score);
 
-            // 如果不在目标建筑物位置，先移动过去
-            if (!this.isAtPosition(targetBuilding.position)) {
-                console.log(`代理 ${this.id} 开始移动到 ${targetBuilding.name}`);
-                const moveResult = await this.moveTo(targetBuilding.position);
-                if (!moveResult) {
-                    // 记录移动失败
-                    this.recordAction({
-                        action: 'move',
-                        target: targetBuilding.id,
-                        reason: '前往目标建筑物'
-                    }, 'failed', {
-                        error: '移动失败',
-                        errorType: 'MovementFailed'
-                    });
-                    return null;
-                }
-            }
+            // 5. 选择最佳建筑物
+            const targetBuilding = evaluatedBuildings[0].building;
 
-            // 执行需求行动
-            console.log(`代理 ${this.id} 准备在 ${targetBuilding.name} 执行 ${need.type} 行动`);
-            const actionResult = await this.executeNeedAction(need, targetBuilding);
-
-            // 根据行动结果设置不同的冷却时间
-            this.behaviorControl.actionCooldown = actionResult ? 5000 : 8000; // 成功5秒，失败8秒
-            this.behaviorControl.lastActionTime = Date.now();
-
-            return actionResult;
+            // 6. 执行需求行动
+            return await this.executeNeedAction(need, targetBuilding);
 
         } catch (error) {
-            console.error(`代理 ${this.id} 处理紧急需求失败:`, error);
-            
-            // 记录失败
-            this.recordAction({
-                action: need.type,
-                target: null,
-                reason: need.reason
-            }, 'failed', {
-                error: error.message,
-                errorType: error.name,
-                errorStack: error.stack
-            });
-
-            // 设置较长的冷却时间
-            this.behaviorControl.lastActionTime = Date.now();
-            this.behaviorControl.actionCooldown = 15000; // 15秒
-            
-            return null;
-        } finally {
-            // 确保状态被重置
-            this.resetBehaviorState();
+            console.error(`处理紧急需求失败:`, error);
+            return this.handleUrgentNeedFailure(need, error);
         }
     }
 
-    findBuildingForNeed(need) {
-        console.log(`正在为需求 ${need.type} 查找建筑物...`);
-        
-        // 根据需求类型和时间段查合适的建筑物
-        const buildingTypes = {
-            rest: ['residential'],  // 住宅区永远可用于休息
-            eat: {
-                day: ['restaurant', 'cafeteria', 'cafe'],
-                night: ['residential']  // 夜间在住所吃东西
-            },
-            socialize: {
-                day: ['commercial', 'recreation', 'park', 'restaurant', 'cafe', 'plaza', 'community_center'],
-                night: ['residential', 'recreation']  // 夜间可以在住所或娱乐场所社交
-            },
-            work: ['office', 'commercial'],
-            relax: {
-                day: ['park', 'recreation', 'entertainment'],
-                night: ['residential', 'recreation']  // 夜间在住所或娱乐场所放松
-            }
+    validateUrgency(need) {
+        const thresholds = {
+            energy: { critical: 20, urgent: 30, normal: 50 },
+            hunger: { critical: 80, urgent: 70, normal: 60 },
+            stress: { critical: 80, urgent: 70, normal: 60 },
+            socialNeeds: { critical: 80, urgent: 70, normal: 60 }
         };
 
-        // 使用游戏时间而不是系统时间
-        const currentHour = this.timeTracking.gameTime.getHours();
-        const isNightTime = currentHour < 6 || currentHour >= 22;
-        
-        // 获取当前时段可用的建筑类型
-        let suitableTypes;
-        if (typeof buildingTypes[need.type] === 'object') {
-            suitableTypes = buildingTypes[need.type][isNightTime ? 'night' : 'day'];
-        } else {
-            suitableTypes = buildingTypes[need.type] || [];
+        const state = this.state;
+        let urgencyLevel = 0;
+
+        switch (need.type) {
+            case 'rest':
+                if (state.physical.energy < thresholds.energy.critical) urgencyLevel = 5;
+                else if (state.physical.energy < thresholds.energy.urgent) urgencyLevel = 4;
+                else if (state.physical.energy < thresholds.energy.normal) urgencyLevel = 3;
+                break;
+            case 'eat':
+                if (state.physical.hunger > thresholds.hunger.critical) urgencyLevel = 5;
+                else if (state.physical.hunger > thresholds.hunger.urgent) urgencyLevel = 4;
+                else if (state.physical.hunger > thresholds.hunger.normal) urgencyLevel = 3;
+                break;
+            // ... 其他需求类型的判断
         }
 
-        console.log(`当前游戏时间: ${currentHour}:00, ${isNightTime ? '夜间' : '日间'}`);
-        console.log(`可用建筑类型: ${suitableTypes.join(', ')}`);
-
-        // 获取所有可用建筑
-        const availableBuildings = Array.from(this.city.buildings.values())
-            .filter(building => {
-                const isTypeMatch = suitableTypes.includes(building.type) || 
-                                  suitableTypes.includes(building.subType);
-                const isOpen = building.status?.isOpen !== false;
-                const hasCapacity = !building.atCapacity;
-
-                console.log(`检查建筑 ${building.name || building.id}:`, {
-                    类型匹配: isTypeMatch,
-                    开放状态: isOpen,
-                    容量状态: hasCapacity,
-                    建筑类型: building.type,
-                    子类型: building.subType,
-                    游戏时间: `${currentHour}:00`
-                });
-
-                return (isTypeMatch && isOpen && hasCapacity);
-            });
-
-        if (availableBuildings.length === 0) {
-            console.log(`未找到满需求 ${need.type} 的建筑物`);
-            return null;
-        }
-
-        // 按距离排序，选择最近的建筑
-        const sortedBuildings = availableBuildings.sort((a, b) => {
-            const distA = this.calculateDistance(this.position, a.position);
-            const distB = this.calculateDistance(this.position, b.position);
-            return distA - distB;
-        });
-
-        const selectedBuilding = sortedBuildings[0];
-        console.log(`选择建筑物: ${selectedBuilding.name || selectedBuilding.id}`, {
-            类型: selectedBuilding.type,
-            距离: this.calculateDistance(this.position, selectedBuilding.position),
-            游戏时间: `${currentHour}:00`
-        });
-
-        return selectedBuilding;
+        return urgencyLevel;
     }
 
-    async executeNeedAction(need, building) {
-        if (!building) {
-            throw new Error('无效的建筑物');
+    canHandleNewNeed(need) {
+        // 检查是否有更紧急的需求
+        const currentUrgentNeed = this.checkUrgentNeeds();
+        if (currentUrgentNeed && currentUrgentNeed.priority > need.priority) {
+            return false;
         }
 
-        try {
-            // 创建完整的行为对象
-            const action = {
-                action: need.type,
-                target: building.id,
-                reason: need.reason,
-                location: building.name,
-                startTime: Date.now(),
-                duration: this.getActionDuration(need.type)
-            };
-
-            // 执行行动
-            const actionResult = await this.performAction(action);
-
-            if (actionResult) {
-                // 更新建筑物使用状态
-                building.currentOccupancy = (building.currentOccupancy || 0) + 1;
+        // 检查当前行为是否可以中断
+        if (this.behaviorControl.isActing) {
+            const currentAction = this.behaviorControl.currentAction;
+            const currentPriority = this.decisionPriority.calculate(
+                { action: currentAction },
+                this.state
+            );
+            if (currentPriority >= need.priority) {
+                return false;
             }
-
-            return actionResult;
-
-        } catch (error) {
-            console.error(`代理 ${this.id} 执行需求行动失败:`, error);
-            return null;
         }
+
+        return true;
+    }
+
+    async findSuitableBuildings(need) {
+        // 获取所有可的建筑物
+        const buildings = Array.from(this.city.buildings.values())
+            .filter(building => {
+                // 基本条件检查
+                if (!building.status?.isOpen) return false;
+                if (building.currentOccupancy >= building.capacity) return false;
+
+                // 检查建筑物是否提供所需服务
+                const services = this.city.getBuildingServices(building);
+                return services.includes(need.type);
+            });
+
+        // 按距离和适合度排序
+        return buildings.sort((a, b) => {
+            const distA = this.calculateDistance(this.position, a.position);
+            const distB = this.calculateDistance(this.position, b.position);
+            const suitabilityA = this.evaluateBuildingSuitability(a, need);
+            const suitabilityB = this.evaluateBuildingSuitability(b, need);
+            
+            // 综合考虑距离和适合度
+            return (distA * 0.4 + suitabilityA * 0.6) - 
+                   (distB * 0.4 + suitabilityB * 0.6);
+        });
+    }
+
+    evaluateBuildingSuitability(building, need) {
+        let score = 100;
+
+        // 根据建筑物当前状态调整分数
+        score *= (building.status.condition / 100);
+
+        // 根据拥挤程度调整分数
+        const occupancyRate = building.currentOccupancy / building.capacity;
+        if (occupancyRate > 0.8) {
+            score *= (1 - (occupancyRate - 0.8));
+        }
+
+        // 根据建筑物服务质量调整分数
+        if (building.status.services?.[need.type]) {
+            score *= (building.status.services[need.type].quality / 100);
+        }
+
+        // 根据历史经验调整分数
+        const history = this.memory.shortTerm.filter(m => 
+            m.type === 'action' && 
+            m.location === building.id &&
+            m.action === need.type
+        );
+        
+        if (history.length > 0) {
+            const successRate = history.filter(h => h.status === 'completed').length / 
+                              history.length;
+            score *= (0.8 + successRate * 0.2);
+        }
+
+        return score;
+    }
+
+    handleUrgentNeedFailure(need, error) {
+        // 记录失败
+        this.recordAction({
+            action: need.type,
+            target: null,
+            reason: need.reason
+        }, 'failed', {
+            error: error.message,
+            errorType: error.name,
+            errorStack: error.stack
+        });
+
+        // 设置较长的冷却时间
+        this.behaviorControl.lastActionTime = Date.now();
+        this.behaviorControl.actionCooldown = 15000; // 15秒
+
+        // 尝试替代方案
+        return this.findAlternativeSolution(need);
+    }
+
+    async findAlternativeSolution(need) {
+        // 根据需求类型查找替代方案
+        const alternatives = {
+            rest: ['relax', 'socialize'],
+            eat: ['rest', 'socialize'],
+            socialize: ['entertainment', 'rest'],
+            work: ['study', 'socialize']
+        };
+
+        const alternativeActions = alternatives[need.type] || [];
+        
+        // 尝试每个替代方案
+        for (const action of alternativeActions) {
+            const decision = await this.getDecisionForAction(action);
+            if (decision) {
+                return this.executeAction(decision);
+            }
+        }
+
+        return null;
     }
 
     updateStateAfterAction(actionType) {
@@ -1497,7 +1674,7 @@ class AIAgent {
             }
         }
 
-        // 检查体力是否足够
+        // 检查力是否足够
         if (activity.energyCost && this.state.physical.energy < activity.energyCost) {
             return false;
         }
@@ -1776,57 +1953,119 @@ class AIAgent {
     }
 
     recordAction(action, status = 'completed', details = {}) {
-        // 确保action参数存在且有基本结构
-        const safeAction = action || {
-            action: 'unknown',
-            target: null,
-            reason: '未知原因'
-        };
+        try {
+            // 确保action参数存在且有基本结构
+            const safeAction = {
+                type: action.action || action.type || 'unknown',
+                target: this.getActionTargetName(action.target),
+                location: action.location || this.getCurrentLocationName(),
+                startTime: action.startTime || Date.now(),
+                gameTime: new Date(this.timeTracking.gameTime),
+                // 改进原因的获取逻辑
+                reason: this.getActionReason(action)
+            };
 
-        // 创建完整的记录
-        const record = {
-            type: safeAction.action,
-            target: safeAction.target || '无目标',
-            location: safeAction.location || this.getCurrentLocationName(),
-            startTime: safeAction.startTime || Date.now(),
-            endTime: Date.now(),
-            gameTime: new Date(this.timeTracking.gameTime),
-            status: status,
-            reason: safeAction.reason || '无原因',
-            impact: {
-                energy: details.energyChange || 0,
-                stress: details.stressChange || 0,
-                happiness: details.happinessChange || 0,
-                social: details.socialChange || 0
-            }
-        };
+            // 创建完整的记录
+            const record = {
+                type: safeAction.type,
+                target: safeAction.target,
+                location: safeAction.location,
+                startTime: safeAction.startTime,
+                endTime: Date.now(),
+                gameTime: safeAction.gameTime,
+                status: status,
+                reason: safeAction.reason,
+                impact: {
+                    energy: details.energyChange || 0,
+                    stress: details.stressChange || 0,
+                    happiness: details.happinessChange || 0,
+                    social: details.socialChange || 0
+                }
+            };
 
-        // 根据状态记录到不同的历史记录中
-        if (status === 'completed') {
-            this.actionHistory.completed.push(record);
-            // 限制历史记录长度
-            if (this.actionHistory.completed.length > 20) {
-                this.actionHistory.completed.shift();
+            // 根据状态记录到不同的历史记录中
+            if (status === 'completed') {
+                this.actionHistory.completed.push(record);
+                if (this.actionHistory.completed.length > 20) {
+                    this.actionHistory.completed.shift();
+                }
+            } else if (status === 'failed') {
+                record.error = details.error || '未知错误';
+                this.actionHistory.failed.push(record);
+                if (this.actionHistory.failed.length > 10) {
+                    this.actionHistory.failed.shift();
+                }
             }
-        } else if (status === 'failed') {
-            // 为失败的行为添加错误信息
-            record.error = details.error || '未知错误';
-            this.actionHistory.failed.push(record);
-            if (this.actionHistory.failed.length > 10) {
-                this.actionHistory.failed.shift();
-            }
+
+            console.log(`代理 ${this.id} 行为记录:`, {
+                行为类型: record.type,
+                目标: record.target,
+                地点: record.location,
+                状态: status,
+                原因: record.reason,
+                影响: record.impact,
+                游戏时间: record.gameTime.toLocaleTimeString()
+            });
+
+        } catch (error) {
+            console.error(`记录行为失败:`, error);
+        }
+    }
+
+    getActionReason(action) {
+        // 如果直接提供了原因，使用提供的原因
+        if (action.reason) {
+            return action.reason;
         }
 
-        // 添加详细的日志输出
-        console.log(`代理 ${this.id} 行为记录:`, {
-            行为类型: record.type,
-            目标: record.target,
-            地点: record.location,
-            状态: status,
-            原因: record.reason,
-            影响: record.impact,
-            游戏时间: record.gameTime.toLocaleTimeString()
-        });
+        // 根据行为类型和状态生成默认原因
+        const defaultReasons = {
+            rest: () => `体力值低(${Math.round(this.state.physical.energy)}%)，需要休息`,
+            eat: () => `饥饿度高(${Math.round(this.state.physical.hunger)}%)，需要进食`,
+            work: () => '按照工作计划工作',
+            socialize: () => `社交需求(${Math.round(this.state.social.socialNeeds)}%)，需要互动`,
+            entertainment: () => `压力较大(${Math.round(this.state.emotional.stress)}%)，需要放松`,
+            move: () => '前往目标位置',
+            relax: () => `压力值高(${Math.round(this.state.emotional.stress)}%)，需要放松`
+        };
+
+        // 获取对应行为类型的原因生成函数
+        const reasonGenerator = defaultReasons[action.action || action.type];
+        if (reasonGenerator) {
+            return reasonGenerator();
+        }
+
+        // 如果是紧急需求导致的行为
+        if (action.isUrgent) {
+            return `紧急需求：${action.type}`;
+        }
+
+        // 如果是计划行为
+        if (action.isScheduled) {
+            return '按照日程安排执行';
+        }
+
+        // 如果都没有，返回基于当前状态的通用原因
+        return this.generateActionReason(action);
+    }
+
+    generateActionReason(action) {
+        // 检查各种状态，生成合理的原因
+        if (this.state.physical.energy < 30) {
+            return '体力不足，需要休息';
+        }
+        if (this.state.emotional.stress > 70) {
+            return '压力过大，需要放松';
+        }
+        if (this.state.social.socialNeeds > 70) {
+            return '社交需求强烈，需要互动';
+        }
+        if (this.state.physical.hunger > 70) {
+            return '感到饥饿，需要进食';
+        }
+
+        // 如果没有特别的原因，返回基于行为类型的基础原因
+        return `执行${action.action || action.type}行为`;
     }
 
     // 添加行为锁定方法
@@ -1854,5 +2093,750 @@ class AIAgent {
             return true;
         }
         return false;
+    }
+
+    recordActionSuccess(action) {
+        this.recordAction(action, 'completed', {
+            energyChange: -10,
+            stressChange: -5,
+            happinessChange: 10,
+            socialChange: action.action === 'socialize' ? -30 : 5
+        });
+    }
+
+    recordActionFailure(action, reason) {
+        this.recordAction(action, 'failed', {
+            error: reason,
+            errorType: 'ActionFailed',
+            errorTime: Date.now()
+        });
+    }
+
+    handleActionError(action, error) {
+        console.error(`代理 ${this.id} 执行行动失败:`, error);
+        this.recordAction(action, 'failed', {
+            error: error.message,
+            errorType: error.name,
+            errorStack: error.stack
+        });
+    }
+
+    resetBehaviorState() {
+        // 使用状态管理器清理状态
+        return this.stateManager.cleanupState();
+    }
+
+    // 1. 善记忆清理机制
+    cleanupMemory() {
+        try {
+            const now = Date.now();
+            
+            // 短期记忆清理（保留最近24小时）
+            const oneDayAgo = now - (24 * 60 * 60 * 1000);
+            this.memory.shortTerm = this.memory.shortTerm.filter(memory => {
+                // 检查是否是重要记忆
+                if (this.isImportantMemory(memory)) {
+                    // 将重要记忆转移到长期记忆
+                    this.memory.experiences.push({
+                        ...memory,
+                        transferredAt: now,
+                        importance: this.calculateMemoryImportance(memory)
+                    });
+                    return false; // 从短期记忆中移除
+                }
+                return memory.time > oneDayAgo;
+            });
+
+            // 长期记忆清理（保留最重要的100条）
+            this.memory.experiences = this.memory.experiences
+                .sort((a, b) => (b.importance || 0) - (a.importance || 0))
+                .slice(0, 100);
+
+            // 关系记忆清理（移除过期的关系）
+            for (const [partnerId, relationship] of this.memory.relationships) {
+                if (!relationship.lastInteraction || 
+                    now - relationship.lastInteraction > 30 * 24 * 60 * 60 * 1000) { // 30天
+                    this.memory.relationships.delete(partnerId);
+                }
+            }
+
+            console.log(`代理 ${this.id} 记忆清理完成:`, {
+                短期记忆: this.memory.shortTerm.length,
+                长期记忆: this.memory.experiences.length,
+                关系数量: this.memory.relationships.size
+            });
+
+        } catch (error) {
+            console.error(`代理 ${this.id} 记忆清理失败:`, error);
+        }
+    }
+
+    // 2. 改进记忆影响决策的机制
+    async getRelevantMemories(context) {
+        const relevantMemories = {
+            recent: [],      // 最近的相关记忆
+            important: [],   // 重要的相关记忆
+            emotional: [],   // 情感相关的记忆
+            location: [],    // 地点相关的记忆
+            social: []       // 社交相关的记忆
+        };
+
+        const now = Date.now();
+        const locationName = this.getCurrentLocationName();
+
+        // 搜索所有记忆
+        [...this.memory.shortTerm, ...this.memory.experiences].forEach(memory => {
+            // 计算记忆的相关性分数
+            const relevanceScore = this.calculateMemoryRelevance(memory, context);
+            
+            if (relevanceScore > 0.5) { // 相关性阈值
+                // 根据记忆类型分类
+                if (now - memory.time < 3600000) { // 1小时内
+                    relevantMemories.recent.push({...memory, relevance: relevanceScore});
+                }
+                if (memory.importance > 0.7) {
+                    relevantMemories.important.push({...memory, relevance: relevanceScore});
+                }
+                if (memory.type === 'emotional' || memory.emotionalImpact > 0.5) {
+                    relevantMemories.emotional.push({...memory, relevance: relevanceScore});
+                }
+                if (memory.location === locationName) {
+                    relevantMemories.location.push({...memory, relevance: relevanceScore});
+                }
+                if (memory.type === 'social' || memory.type === 'interaction') {
+                    relevantMemories.social.push({...memory, relevance: relevanceScore});
+                }
+            }
+        });
+
+        // 对每个类别的记忆按相关性排序并限制数量
+        Object.keys(relevantMemories).forEach(key => {
+            relevantMemories[key] = relevantMemories[key]
+                .sort((a, b) => b.relevance - a.relevance)
+                .slice(0, 5);
+        });
+
+        return relevantMemories;
+    }
+
+    // 3. 添加记忆优先级系统
+    calculateMemoryImportance(memory) {
+        let importance = 0;
+
+        // 基于记忆类型的基础重要性
+        const baseImportance = {
+            emotional: 0.6,    // 情感相关
+            social: 0.7,       // 社交相关
+            achievement: 0.8,  // 成就相关
+            failure: 0.6,      // 失败经历
+            decision: 0.5,     // 决策记录
+            routine: 0.3       // 日常行为
+        }[memory.type] || 0.4;
+
+        importance += baseImportance;
+
+        // 基于情感影响
+        if (memory.emotionalImpact) {
+            importance += Math.abs(memory.emotionalImpact) * 0.3;
+        }
+
+        // 基于社交关系
+        if (memory.type === 'social' && memory.partnerId) {
+            const relationship = this.memory.relationships.get(memory.partnerId);
+            if (relationship) {
+                importance += Math.abs(relationship.level) * 0.2;
+            }
+        }
+
+        // 基于重复度（重复出现的记忆可能更重要）
+        const similarMemories = this.findSimilarMemories(memory);
+        importance += Math.min(0.3, similarMemories.length * 0.1);
+
+        // 基于时间衰减
+        const ageInHours = (Date.now() - memory.time) / (60 * 60 * 1000);
+        const timeDecay = Math.max(0, 1 - (ageInHours / (24 * 30))); // 30天完全衰减
+        importance *= timeDecay;
+
+        // 确保最终重要性在0-1之间
+        return Math.max(0, Math.min(1, importance));
+    }
+
+    findSimilarMemories(targetMemory) {
+        return [...this.memory.shortTerm, ...this.memory.experiences].filter(memory => {
+            if (memory === targetMemory) return false;
+            
+            // 检查是否是相似的记忆
+            return (
+                memory.type === targetMemory.type &&
+                memory.location === targetMemory.location &&
+                (memory.action === targetMemory.action || 
+                 memory.partnerId === targetMemory.partnerId)
+            );
+        });
+    }
+
+    calculateMemoryRelevance(memory, context) {
+        let relevance = 0;
+
+        // 时间相关性（最近的记忆更相关）
+        const ageInHours = (Date.now() - memory.time) / (60 * 60 * 1000);
+        const timeRelevance = Math.max(0, 1 - (ageInHours / 24)); // 24小时内的记忆最相关
+        relevance += timeRelevance * 0.3;
+
+        // 位置相关性
+        if (memory.location === context.currentLocation) {
+            relevance += 0.3;
+        }
+
+        // 情感状态相关性
+        if (memory.emotionalImpact) {
+            const emotionalStateMatch = 
+                (memory.emotionalImpact > 0 && this.state.emotional.happiness > 70) ||
+                (memory.emotionalImpact < 0 && this.state.emotional.stress > 70);
+            if (emotionalStateMatch) {
+                relevance += 0.2;
+            }
+        }
+
+        // 社交相关性
+        if (memory.type === 'social' && context.socialContext) {
+            if (memory.partnerId === context.socialContext.partnerId) {
+                relevance += 0.4;
+            }
+        }
+
+        // 活动相关性
+        if (memory.action === context.currentAction) {
+            relevance += 0.2;
+        }
+
+        return Math.max(0, Math.min(1, relevance));
+    }
+
+    isImportantMemory(memory) {
+        // 计算记忆的重要性
+        const importance = this.calculateMemoryImportance(memory);
+        
+        // 重要性超过阈值的记忆被认为是重要的
+        return importance > 0.7;
+    }
+
+    async handleNonUrgentNeed(need) {
+        try {
+            console.log(`代理 ${this.id} 处理非紧急需求:`, need);
+
+            // 1. 检查当前状态是否适合处理该需求
+            if (!this.canHandleNeed(need)) {
+                console.log(`代理 ${this.id} 当前状态不适合处理需求`);
+                return null;
+            }
+
+            // 2. 寻找合适的建筑物
+            const buildings = await this.findSuitableBuildings(need);
+            if (buildings.length === 0) {
+                console.log(`代理 ${this.id} 未找到合适的建筑物`);
+                return this.findAlternativeSolution(need);
+            }
+
+            // 3. 评估每个建筑物的适合度
+            const evaluatedBuildings = buildings.map(building => ({
+                building,
+                score: this.evaluateBuildingSuitability(building, need)
+            })).sort((a, b) => b.score - a.score);
+
+            // 4. 选择最佳建筑物
+            const targetBuilding = evaluatedBuildings[0].building;
+
+            // 5. 生成行动决策
+            const decision = {
+                action: need.type,
+                target: targetBuilding.id,
+                reason: need.reason,
+                priority: need.priority,
+                energyCost: this.calculateEnergyCost(need.type),
+                stressImpact: this.calculateStressImpact(need.type)
+            };
+
+            console.log(`代理 ${this.id} 生成非紧急需求决策:`, decision);
+            return decision;
+
+        } catch (error) {
+            console.error(`处理非紧急需求失败:`, error);
+            return this.getDefaultDecision();
+        }
+    }
+
+    canHandleNeed(need) {
+        // 检查体力是否足够
+        if (this.state.physical.energy < 20) {
+            return false;
+        }
+
+        // 检查压力是否过高
+        if (this.state.emotional.stress > 80) {
+            return false;
+        }
+
+        // 检查是否在执行其他重要行动
+        if (this.behaviorControl.isActing) {
+            const currentAction = this.behaviorControl.currentAction;
+            const currentPriority = this.getCurrentActionPriority();
+            if (currentPriority >= need.priority) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    getCurrentActionPriority() {
+        const priorityMap = {
+            work: 3,
+            rest: 4,
+            eat: 4,
+            socialize: 2,
+            entertainment: 1
+        };
+
+        return priorityMap[this.behaviorControl.currentAction] || 0;
+    }
+
+    calculateEnergyCost(actionType) {
+        const energyCosts = {
+            work: 20,
+            rest: -30,
+            eat: -10,
+            socialize: 10,
+            entertainment: 15
+        };
+
+        return energyCosts[actionType] || 10;
+    }
+
+    calculateStressImpact(actionType) {
+        const stressImpacts = {
+            work: 15,
+            rest: -20,
+            eat: -5,
+            socialize: -10,
+            entertainment: -15
+        };
+
+        return stressImpacts[actionType] || 0;
+    }
+
+    getDefaultDecision() {
+        return {
+            action: 'rest',
+            target: this.residence?.id,
+            reason: '默认休息行为',
+            priority: 1,
+            energyCost: 5,
+            stressImpact: -5
+        };
+    }
+
+    async getDecisionForAction(actionType) {
+        try {
+            // 1. 创建决策上下文
+            const context = {
+                agent: {
+                    id: this.id,
+                    occupation: this.occupation,
+                    personality: this.personality,
+                    currentState: this.state,
+                    currentLocation: this.getCurrentLocationName()
+                },
+                environment: {
+                    nearbyBuildings: this.getNearbyBuildings(),
+                    nearbyAgents: this.getNearbyAgents(),
+                    timeOfDay: this.timeTracking.gameTime.getHours(),
+                    weather: this.city.getCurrentWeather()
+                },
+                action: {
+                    type: actionType,
+                    isForced: true
+                }
+            };
+
+            // 2. 根据行动类型找到合适的建筑物
+            const targetBuilding = this.city.findBuildingForAction(actionType, this);
+            if (!targetBuilding) {
+                console.log(`未找到适合 ${actionType} 的建筑物`);
+                return null;
+            }
+
+            // 3. 生成决策对象
+            const decision = {
+                action: actionType,
+                target: targetBuilding.id,
+                reason: `执行${actionType}行为`,
+                priority: this.getActionPriority(actionType),
+                energyCost: this.calculateEnergyCost(actionType),
+                stressImpact: this.calculateStressImpact(actionType),
+                location: targetBuilding.name
+            };
+
+            // 4. 验证决策
+            if (!this.validateDecision(decision)) {
+                console.log('决策验证失败:', decision);
+                return null;
+            }
+
+            return decision;
+
+        } catch (error) {
+            console.error(`为行动 ${actionType} 生成决策失败:`, error);
+            return null;
+        }
+    }
+
+    getActionPriority(actionType) {
+        // 定义不同行动类型的基础优先级
+        const basePriorities = {
+            rest: 4,      // 休息优先级最高
+            eat: 4,       // 进食优先级同样高
+            work: 3,      // 工作次之
+            socialize: 2, // 社交再次之
+            entertainment: 1  // 娱乐优先级最低
+        };
+
+        // 获取基础优先级，如果未定义则返回1
+        let priority = basePriorities[actionType] || 1;
+
+        // 根据当前状态调整优先级
+        switch (actionType) {
+            case 'rest':
+                if (this.state.physical.energy < 30) priority += 2;
+                break;
+            case 'eat':
+                if (this.state.physical.hunger > 70) priority += 2;
+                break;
+            case 'socialize':
+                if (this.state.social.socialNeeds > 70) priority += 1;
+                break;
+            case 'work':
+                // 在工作时间提高工作优先级
+                const hour = this.timeTracking.gameTime.getHours();
+                if (hour >= 9 && hour <= 17) priority += 1;
+                break;
+        }
+
+        return Math.min(5, priority); // 确保优先级不超过5
+    }
+
+    validateDecision(decision) {
+        // 检查决策对象是否包含所有必要字段
+        const requiredFields = [
+            'action',
+            'target',
+            'reason',
+            'priority',
+            'energyCost',
+            'stressImpact'
+        ];
+
+        const hasAllFields = requiredFields.every(field => 
+            decision.hasOwnProperty(field) && decision[field] !== undefined
+        );
+
+        if (!hasAllFields) {
+            console.log('决策缺少必要字段:', decision);
+            return false;
+        }
+
+        // 检查数值是否在合理范围内
+        if (decision.priority < 1 || decision.priority > 5) {
+            console.log('决策优先级超出范围:', decision.priority);
+            return false;
+        }
+
+        if (decision.energyCost < -50 || decision.energyCost > 50) {
+            console.log('能量消耗超出范围:', decision.energyCost);
+            return false;
+        }
+
+        if (decision.stressImpact < -50 || decision.stressImpact > 50) {
+            console.log('压力影响超出范围:', decision.stressImpact);
+            return false;
+        }
+
+        // 检查目标建筑物是否存在
+        if (decision.target && !this.city.buildings.has(decision.target)) {
+            console.log('目标建筑物不存在:', decision.target);
+            return false;
+        }
+
+        return true;
+    }
+
+    // 新增：获取行为目标的名称
+    getActionTargetName(targetId) {
+        if (!targetId) return '未指定目标';
+
+        // 如果目标是建筑物
+        const building = this.city?.buildings.get(targetId);
+        if (building) {
+            return building.name;
+        }
+
+        // 如果目标是其他代理
+        const targetAgent = this.city?.agents.get(targetId);
+        if (targetAgent) {
+            return `代理${targetAgent.id}`;
+        }
+
+        // 如果是位置坐标
+        if (typeof targetId === 'object' && 'x' in targetId && 'z' in targetId) {
+            return `位置(${Math.round(targetId.x)}, ${Math.round(targetId.z)})`;
+        }
+
+        // 如果是特定行为的默认目标
+        const defaultTargets = {
+            'rest': '休息区',
+            'work': '工作区',
+            'eat': '餐饮区',
+            'socialize': '社交区',
+            'entertainment': '娱乐区'
+        };
+
+        if (this.behaviorControl?.currentAction) {
+            return defaultTargets[this.behaviorControl.currentAction] || targetId.toString();
+        }
+
+        return targetId.toString();
+    }
+}
+
+// 添加 StateManager 类定义
+class StateManager {
+    constructor(agent) {
+        this.agent = agent;
+        this.state = {
+            type: 'idle',
+            isActing: false,
+            isMoving: false,
+            currentAction: null,
+            actionStartTime: null,
+            actionDuration: null,
+            lastActionTime: Date.now(),
+            actionCooldown: 5000
+        };
+        this.stateHistory = [];
+        this.stateValidators = new Map();
+        this.initializeValidators();
+    }
+
+    initializeValidators() {
+        // 修改验证规则，使其更加灵活
+        this.stateValidators.set('moving', (state) => {
+            return state.hasOwnProperty('isMoving') && 
+                   state.hasOwnProperty('startTime');
+        });
+
+        this.stateValidators.set('acting', (state) => {
+            // 修改验证逻辑，不再强制要求action字段
+            return state.hasOwnProperty('isActing') && 
+                   state.hasOwnProperty('startTime');
+        });
+
+        this.stateValidators.set('idle', (state) => {
+            return state.hasOwnProperty('isActing') && 
+                   state.hasOwnProperty('isMoving');
+        });
+    }
+
+    async changeState(newState) {
+        try {
+            // 确保newState包含必要的字段，并设置默认值
+            const validState = {
+                type: newState.type || 'idle',
+                isActing: newState.isActing !== undefined ? newState.isActing : false,
+                isMoving: newState.type === 'moving',
+                currentAction: newState.action || null,  // 允许action为null
+                startTime: newState.startTime || Date.now(),
+                duration: newState.duration || 0,
+                lastActionTime: Date.now()
+            };
+
+            // 验证新状态
+            if (!this.validateState(validState)) {
+                console.error('无效的状态数据:', validState);
+                throw new Error('无效的状态数据');
+            }
+
+            // 保存之前的状态
+            this.previousState = {...this.state};
+
+            // 执行状态退出逻辑
+            if (this.state) {
+                await this.exitState(this.state);
+            }
+
+            // 更新状态
+            this.state = validState;
+            this.lastStateChange = Date.now();
+
+            // 记录状态历史
+            this.stateHistory.push({
+                from: this.previousState,
+                to: this.state,
+                timestamp: this.lastStateChange
+            });
+
+            // 限制历史记录长度
+            if (this.stateHistory.length > 20) {
+                this.stateHistory.shift();
+            }
+
+            // 执行状态进入逻辑
+            await this.enterState(validState);
+
+            console.log(`代理 ${this.agent.id} 状态变更:`, {
+                从: this.previousState?.type || 'none',
+                到: this.state.type,
+                时间: new Date(this.lastStateChange).toLocaleTimeString(),
+                详细: validState
+            });
+
+            return true;
+
+        } catch (error) {
+            console.error(`代理 ${this.agent.id} 状态切换失败:`, error);
+            return false;
+        }
+    }
+
+    validateState(state) {
+        // 基础验证
+        if (!state || typeof state !== 'object') {
+            console.error('状态对象无效');
+            return false;
+        }
+
+        // 检查必要字段
+        const requiredFields = ['type', 'isActing', 'isMoving', 'startTime'];
+        const hasAllFields = requiredFields.every(field => {
+            const hasField = state.hasOwnProperty(field);
+            if (!hasField) {
+                console.error(`缺少必要字段: ${field}`);
+            }
+            return hasField;
+        });
+
+        if (!hasAllFields) {
+            return false;
+        }
+
+        // 检查字段类型
+        if (typeof state.isActing !== 'boolean' || 
+            typeof state.isMoving !== 'boolean' || 
+            typeof state.startTime !== 'number') {
+            console.error('字段类型错误');
+            return false;
+        }
+
+        // 获取对应的验证器
+        const validator = this.stateValidators.get(state.type);
+        if (!validator) {
+            // 如果没有找到对应的验证器，使用默认验证
+            return this.defaultValidator(state);
+        }
+
+        // 执行验证
+        return validator(state);
+    }
+
+    defaultValidator(state) {
+        // 默认验证器，确保基本字段的类型正确
+        return typeof state.isActing === 'boolean' &&
+               typeof state.isMoving === 'boolean' &&
+               typeof state.startTime === 'number';
+    }
+
+    async enterState(state) {
+        // 根据状态类型执行不同的进入逻辑
+        switch (state.type) {
+            case 'moving':
+                this.agent.behaviorControl.isMoving = true;
+                break;
+            case 'acting':
+                this.agent.behaviorControl.isActing = true;
+                this.agent.behaviorControl.currentAction = state.action;
+                this.agent.behaviorControl.actionStartTime = state.startTime;
+                this.agent.behaviorControl.actionDuration = state.duration;
+                break;
+            case 'idle':
+                // 重置所有活动标志
+                this.agent.behaviorControl.isActing = false;
+                this.agent.behaviorControl.isMoving = false;
+                this.agent.behaviorControl.currentAction = null;
+                break;
+        }
+    }
+
+    async exitState(state) {
+        // 根据状态类型执行不同的退出逻辑
+        switch (state.type) {
+            case 'moving':
+                this.agent.behaviorControl.isMoving = false;
+                break;
+            case 'acting':
+                this.agent.behaviorControl.isActing = false;
+                this.agent.behaviorControl.currentAction = null;
+                this.agent.behaviorControl.actionStartTime = null;
+                this.agent.behaviorControl.actionDuration = null;
+                break;
+        }
+    }
+
+    async cleanupState() {
+        try {
+            // 记录清理前的状态
+            const cleanupRecord = {
+                time: Date.now(),
+                previousState: {...this.state},
+                reason: 'manual_cleanup'
+            };
+
+            // 执行状态退出逻辑
+            if (this.state) {
+                await this.exitState(this.state);
+            }
+
+            // 重置所有状态
+            this.state = {
+                isActing: false,
+                isMoving: false,
+                currentAction: null,
+                actionStartTime: null,
+                actionDuration: null,
+                lastActionTime: Date.now(),
+                actionCooldown: 5000
+            };
+
+            // 清除当前行为记录
+            this.agent.actionHistory.current = null;
+
+            // 记录清理操作
+            this.stateHistory.push(cleanupRecord);
+
+            console.log(`代理 ${this.agent.id} 状态已清理:`, cleanupRecord);
+
+            return true;
+
+        } catch (error) {
+            console.error(`代理 ${this.agent.id} 状态清理失:`, error);
+            return false;
+        }
+    }
+
+    getStateInfo() {
+        return {
+            current: this.state,
+            previous: this.previousState,
+            lastChange: this.lastStateChange,
+            history: this.stateHistory.slice(-5)
+        };
     }
 } 

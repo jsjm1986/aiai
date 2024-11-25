@@ -1999,4 +1999,52 @@
 .current-action .value {
     color: #fff;
 }
+
+.current-action {
+    background: rgba(255, 255, 255, 0.05);
+    padding: 15px;
+    border-radius: 8px;
+}
+
+.action-row {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 8px;
+    padding: 4px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.action-row .label {
+    color: #888;
+    width: 80px;
+}
+
+.action-row .value {
+    color: #fff;
+    flex: 1;
+    margin-left: 10px;
+}
+
+.action-progress {
+    margin-top: 10px;
+}
+
+.progress-bar {
+    height: 4px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-bottom: 4px;
+}
+
+.progress-fill {
+    height: 100%;
+    background: #4CAF50;
+    transition: width 0.3s ease;
+}
+
+.progress-text {
+    font-size: 12px;
+    color: #888;
+}
  

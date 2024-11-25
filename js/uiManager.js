@@ -108,7 +108,7 @@ class UIManager {
 
             <div class="agent-detail-section">
                 <div class="agent-detail-title">当前行为</div>
-                ${this.formatCurrentAction(agent.actionHistory.current)}
+                ${this.formatCurrentAction(agent.behaviorControl)}
             </div>
 
             <div class="agent-detail-section">
@@ -788,28 +788,45 @@ class UIManager {
     }
 
     formatCurrentAction(currentAction) {
-        if (!currentAction) return '<div class="no-data">当前无行为</div>';
+        if (!currentAction) {
+            return '<div class="no-data">当前无行为</div>';
+        }
 
+        // 计算行为持续时间
         const duration = currentAction.startTime ? 
             Math.round((Date.now() - currentAction.startTime) / 1000) : 0;
 
+        // 获取行为进度
+        const progress = duration && currentAction.duration ? 
+            Math.min(100, (duration / (currentAction.duration / 1000)) * 100) : 0;
+
         return `
             <div class="current-action">
-                <div class="action-type">
+                <div class="action-row">
                     <span class="label">行为类型:</span> 
-                    <span class="value">${currentAction.type}</span>
+                    <span class="value">${currentAction.type || '未知'}</span>
                 </div>
-                <div class="action-target">
+                <div class="action-row">
                     <span class="label">目标:</span> 
                     <span class="value">${currentAction.target || '无'}</span>
                 </div>
-                <div class="action-duration">
+                <div class="action-row">
+                    <span class="label">地点:</span> 
+                    <span class="value">${currentAction.location || '未知'}</span>
+                </div>
+                <div class="action-row">
+                    <span class="label">原因:</span> 
+                    <span class="value">${currentAction.reason || '无'}</span>
+                </div>
+                <div class="action-row">
                     <span class="label">持续时间:</span> 
                     <span class="value">${duration}秒</span>
                 </div>
-                <div class="action-reason">
-                    <span class="label">原因:</span> 
-                    <span class="value">${currentAction.reason || '无'}</span>
+                <div class="action-progress">
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: ${progress}%"></div>
+                    </div>
+                    <span class="progress-text">${Math.round(progress)}%</span>
                 </div>
             </div>
         `;

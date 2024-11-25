@@ -68,11 +68,16 @@ class City {
         this.gameTime = new Date();
         this.gameTime.setHours(8, 0, 0, 0);
         
-        // 添加时间相关配置
+        // 改进时间系统配置
         this.timeConfig = {
             startHour: 8,    // 游戏开始时间
             timeScale: 1,    // 时间流速倍率
-            lastUpdate: Date.now()
+            lastUpdate: Date.now(),
+            // 添加时间转换配置
+            REAL_MINUTE_TO_GAME_HOURS: 1,  // 1现实分钟 = 1游戏小时
+            MIN_TIME_SCALE: 0.5,           // 最小时间流速
+            MAX_TIME_SCALE: 10,            // 最大时间流速
+            UPDATE_INTERVAL: 1000          // 时间更新间隔（毫秒）
         };
 
         console.log('城市实例已创建，初始时间:', this.gameTime.toLocaleTimeString());
@@ -152,7 +157,7 @@ class City {
         // 更新缩放比例
         this.view.scale = newScale;
 
-        // 调整偏移量以保持鼠标位置不变
+        // 调整偏移量保持鼠标位置不变
         this.view.offsetX = mouseX - worldX * this.view.scale;
         this.view.offsetY = mouseY - worldY * this.view.scale;
 
@@ -233,7 +238,7 @@ class City {
             console.log('开始初始化城市...');
             this.loadingManager = new LoadingManager();
 
-            // 1. 初始化UI管理器（如果还没有初始化）
+            // 1. 初始UI管器（如果还没有初始化）
             if (!this.ui) {
                 this.ui = new UIManager(this);
             }
@@ -517,7 +522,7 @@ class City {
 
     drawBuildingDetails(x, y, size, building, style) {
         if (style.details === 'windows') {
-            // 制窗户
+            // 窗户
             const windowWidth = size.width / (style.windows.cols + 1);
             const windowHeight = size.height / (style.windows.rows + 1);
             
@@ -557,7 +562,7 @@ class City {
         this.ctx.textAlign = 'center';
         this.ctx.textBaseline = 'middle';
         
-        // 将建筑物名称分行��示
+        // 将建筑物名称分行示
         const lines = this.wrapText(building.name, size.width - 4);
         lines.forEach((line, index) => {
             this.ctx.fillText(
@@ -589,7 +594,7 @@ class City {
             
             this.ctx.stroke();
             
-            // 绘制路面
+            // 绘路面
             this.ctx.beginPath();
             this.ctx.strokeStyle = '#A0A0A0';
             this.ctx.lineWidth = (road.width || 1) * 2.5;
@@ -979,7 +984,13 @@ class City {
         // 更新游戏时间
         this.updateGameTime();
 
-        // 更新所有AI代理
+        // 检查计划活动
+        this.checkScheduledActivities();
+
+        // 更新建筑物状态
+        this.updateBuildings();
+
+        // 更新代理状态
         if (!this.paused) {
             this.updateAgents();
         }
@@ -993,7 +1004,8 @@ class City {
         }
 
         // 继续下一帧更新
-        this.updateLoopId = setTimeout(() => this.updateLoop(), 1000 / 60);
+        this.updateLoopId = setTimeout(() => this.updateLoop(), 
+            this.timeConfig.UPDATE_INTERVAL);
     }
 
     animate() {
@@ -1106,57 +1118,193 @@ class City {
         const currentHour = this.gameTime.getHours();
         
         this.buildings.forEach(building => {
-            // 根据建筑类型设置默认营业时间
-            const defaultSchedule = {
-                residential: { open: 0, close: 24 },    // 24小时开放
-                commercial: { open: 6, close: 24 },     // 6:00-24:00
-                education: { open: 7, close: 18 },      // 7:00-18:00
-                healthcare: { open: 0, close: 24 },     // 24小时开放
-                recreation: { open: 0, close: 24 },     // 24小时开放
-                park: { open: 0, close: 24 },          // 24小时开放
-                restaurant: { open: 6, close: 2 },      // 6:00-次日2:00
-                cafe: { open: 6, close: 24 }           // 6:00-24:00
+            // 1. 更新建筑物基础状态
+            this.updateBuildingBaseStatus(building, currentHour);
+            
+            // 2. 更新容量状态
+            this.updateBuildingCapacity(building);
+            
+            // 3. 更新服务状态
+            this.updateBuildingServices(building);
+            
+            // 4. 记录状态变化
+            this.logBuildingStatus(building);
+        });
+    }
+
+    updateBuildingBaseStatus(building, currentHour) {
+        // 获取建筑物的详细时间表
+        const schedule = this.getBuildingSchedule(building);
+        
+        // 检查是否在营业时间
+        building.status = building.status || {};
+        building.status.isOpen = this.checkBuildingOpenStatus(schedule, currentHour);
+        
+        // 更新建筑物状态
+        building.status.condition = this.calculateBuildingCondition(building);
+        building.status.lastUpdate = this.gameTime;
+    }
+
+    updateBuildingCapacity(building) {
+        // 初始化容量相关状态
+        building.status.capacity = building.status.capacity || {
+            total: building.capacity || 100,
+            current: 0,
+            reserved: 0,
+            available: building.capacity || 100,
+            sections: new Map()  // 不同区域的容量
+        };
+
+        // 更新当前人数
+        const currentOccupants = this.getAgentsInBuilding(building.id);
+        building.status.capacity.current = currentOccupants.length;
+        
+        // 检查容量限制
+        if (building.status.capacity.current >= building.status.capacity.total * 0.8) {
+            // 发出容量预警
+            this.emitBuildingAlert(building, 'CAPACITY_WARNING');
+        }
+
+        // 更新可用容量
+        building.status.capacity.available = 
+            building.status.capacity.total - 
+            building.status.capacity.current - 
+            building.status.capacity.reserved;
+    }
+
+    updateBuildingServices(building) {
+        // 初始化服务状态
+        building.status.services = building.status.services || {};
+        
+        // 获取建筑物提供的服务列表
+        const services = this.getBuildingServices(building);
+        
+        services.forEach(service => {
+            // 更新每个服务的状态
+            building.status.services[service] = {
+                available: building.status.isOpen,
+                quality: this.calculateServiceQuality(building, service),
+                capacity: this.getServiceCapacity(building, service),
+                currentLoad: this.getServiceCurrentLoad(building, service),
+                lastUpdate: this.gameTime
             };
+        });
+    }
 
-            // 获取建筑物类型的默认营业时间
-            const schedule = defaultSchedule[building.type] || defaultSchedule.commercial;
-
-            // 特殊处理24小时营业的建筑物
-            const is24Hours = schedule.open === 0 && schedule.close === 24;
-
-            // 更新开放状态
-            building.status = building.status || {};
-            if (is24Hours) {
-                building.status.isOpen = true;
-            } else if (schedule.close < schedule.open) {
-                // 处理跨日营业的情况
-                building.status.isOpen = currentHour >= schedule.open || currentHour < schedule.close;
-            } else {
-                building.status.isOpen = currentHour >= schedule.open && currentHour < schedule.close;
+    getBuildingSchedule(building) {
+        // 根据建筑类型返回详细的营业时间表
+        const defaultSchedules = {
+            residential: { 
+                default: { open: 0, close: 24 }  // 24小时
+            },
+            commercial: {
+                weekday: { open: 9, close: 21 },
+                weekend: { open: 10, close: 22 }
+            },
+            restaurant: {
+                lunch: { open: 11, close: 14 },
+                dinner: { open: 17, close: 22 }
+            },
+            cafe: {
+                default: { open: 7, close: 23 }
+            },
+            park: {
+                default: { open: 0, close: 24 }
+            },
+            plaza: {
+                default: { open: 0, close: 24 }
+            },
+            recreation: {
+                default: { open: 9, close: 22 }
             }
+        };
 
-            // 更新建筑物容量状态
-            if (building.capacity) {
-                building.atCapacity = building.currentOccupancy >= building.capacity;
-            }
+        return building.schedule || 
+               defaultSchedules[building.type]?.default || 
+               { open: 9, close: 18 };
+    }
 
-            // 更新服务状态
-            if (building.status.services) {
-                Object.keys(building.status.services).forEach(service => {
-                    building.status.services[service].available = building.status.isOpen;
-                });
-            }
+    checkBuildingOpenStatus(schedule, currentHour, currentMinute) {
+        // 处理24小时营业的情况
+        if (schedule.open === 0 && schedule.close === 24) {
+            return true;
+        }
 
-            // 添加日志输出
-            console.log(`更新建筑物状态: ${building.name || building.id}`, {
-                类型: building.type,
-                当前时间: `${currentHour}:00`,
-                营业时间: is24Hours ? '24小时' : 
-                    `${schedule.open}:00-${schedule.close === 24 ? '24' : schedule.close}:00`,
-                是否开放: building.status.isOpen,
-                当前人数: building.currentOccupancy || 0,
-                最大容量: building.capacity || '无限制'
-            });
+        // 处理跨日营业的情况
+        if (schedule.close < schedule.open) {
+            return currentHour >= schedule.open || currentHour < schedule.close;
+        }
+
+        // 处理特殊时段
+        if (schedule.lunch || schedule.dinner) {
+            return (currentHour >= schedule.lunch?.open && currentHour < schedule.lunch?.close) ||
+                   (currentHour >= schedule.dinner?.open && currentHour < schedule.dinner?.close);
+        }
+
+        // 常规营业时间判断
+        return currentHour >= schedule.open && currentHour < schedule.close;
+    }
+
+    calculateBuildingCondition(building) {
+        // 计算建筑物状态（0-100）
+        let condition = 100;
+        
+        // 根据使用间减少状态值
+        const hoursOpen = this.getHoursOpen(building);
+        condition -= hoursOpen * 0.1;
+        
+        // 根据使用人数减少状态值
+        const totalVisitors = building.status.capacity?.current || 0;
+        condition -= totalVisitors * 0.01;
+        
+        // 确保状态值在有效范围内
+        return Math.max(0, Math.min(100, condition));
+    }
+
+    getAgentsInBuilding(buildingId) {
+        // 获取当前在建筑物内的所有代理
+        return Array.from(this.agents.values()).filter(agent => 
+            agent.currentLocation?.id === buildingId
+        );
+    }
+
+    calculateServiceQuality(building, service) {
+        // 计算服务质量（0-100）
+        let quality = 100;
+        
+        // 根据建筑物状态调整
+        quality *= (building.status.condition / 100);
+        
+        // 根据拥挤程度调整
+        const capacity = this.getServiceCapacity(building, service);
+        const currentLoad = this.getServiceCurrentLoad(building, service);
+        const occupancyRate = capacity > 0 ? currentLoad / capacity : 1;
+        
+        if (occupancyRate > 0.8) {
+            quality *= (1 - (occupancyRate - 0.8));
+        }
+        
+        // 根据服务类型特殊调整
+        const serviceFactors = {
+            socialize: 1.2,  // 社交服务质量提升
+            rest: 0.9,      // 休息服务质量略低
+            work: 1.0       // 工作服务保持不变
+        };
+        
+        quality *= (serviceFactors[service] || 1);
+        
+        return Math.max(0, Math.min(100, quality));
+    }
+
+    logBuildingStatus(building) {
+        console.log(`更新建筑物状态: ${building.name}`, {
+            类型: building.type,
+            当前时间: this.gameTime.toLocaleTimeString(),
+            营业状态: building.status.isOpen ? '营业中' : '已关闭',
+            当前人数: building.status.capacity.current,
+            最大容量: building.status.capacity.total,
+            建筑状况: building.status.condition,
+            服务状态: building.status.services
         });
     }
 
@@ -1304,14 +1452,14 @@ class City {
             });
 
             console.log('城市场景设置完成，建筑物总数:', this.buildings.size);
-            console.log('可用于社交的建筑物:', 
+            console.log('可用于社交的建筑:', 
                 Array.from(this.buildings.values())
                     .filter(b => b.functions.includes('socialize'))
                     .map(b => b.name)
             );
 
         } catch (error) {
-            console.error('设置城市场景失败:', error);
+            console.error('置城市场景失败:', error);
             throw error;
         }
     }
@@ -1428,7 +1576,7 @@ class City {
         );
     }
 
-    // 获取可以满足特定需求的建筑物列表
+    // 获取可以满足特定需求的建筑列表
     getBuildingsForNeed(need) {
         return Array.from(this.buildings.values())
             .filter(building => this.canSatisfyNeed(building.id, need))
@@ -1535,8 +1683,9 @@ class City {
 
         const now = Date.now();
         const realTimePassed = (now - this.timeConfig.lastUpdate) / 1000; // 转换为秒
-        const gameTimePassed = realTimePassed * this.timeScale; // 应用时间倍率
-        
+        const gameTimePassed = realTimePassed * this.timeScale * 
+            (3600 / (60 / this.timeConfig.REAL_MINUTE_TO_GAME_HOURS)); // 转换为游戏时间
+
         // 更新游戏时间
         this.gameTime = new Date(this.gameTime.getTime() + (gameTimePassed * 1000));
         this.timeConfig.lastUpdate = now;
@@ -1548,12 +1697,27 @@ class City {
             }
         });
 
+        // 检查并更新建筑物状态
+        this.updateBuildingsForNewHour();
+
         // 更新UI显示
         if (this.ui) {
             this.ui.updateGameTime(this.gameTime.toLocaleTimeString());
         }
 
         return this.gameTime;
+    }
+
+    // 转换真实时间到游戏时间
+    realTimeToGameTime(realMilliseconds) {
+        return realMilliseconds * this.timeScale * 
+            (this.timeConfig.REAL_MINUTE_TO_GAME_HOURS / 60);
+    }
+
+    // 转换游戏时间到真实时间
+    gameTimeToRealTime(gameMilliseconds) {
+        return gameMilliseconds / this.timeScale / 
+            (this.timeConfig.REAL_MINUTE_TO_GAME_HOURS / 60);
     }
 
     togglePause() {
@@ -1596,7 +1760,7 @@ class City {
                 this.buildingUpdateInterval = null;
             }
 
-            console.log('模拟已��停，当前游戏时间:', this.gameTime.toLocaleTimeString());
+            console.log('模拟已暂停，当前游戏时间:', this.gameTime.toLocaleTimeString());
             
             // 更新UI显示
             if (this.ui) {
@@ -1748,7 +1912,7 @@ class City {
     }
 
     calculateBuildingSuitability(building, action, agent) {
-        // 计算建筑物的适合度
+        // 计算建筑物的适度
         let score = 0;
         
         // 检查建筑物当前的拥挤程度
@@ -1768,5 +1932,184 @@ class City {
         }
 
         return score;
+    }
+
+    updateBuildingsForNewHour() {
+        const currentHour = this.gameTime.getHours();
+        const currentMinute = this.gameTime.getMinutes();
+
+        this.buildings.forEach(building => {
+            // 获取建筑物的详细时间表
+            const schedule = this.getBuildingSchedule(building);
+            
+            // 检查是否需要更新状态
+            const newOpenStatus = this.checkBuildingOpenStatus(schedule, currentHour, currentMinute);
+            
+            if (building.status?.isOpen !== newOpenStatus) {
+                // 状态发生变化
+                building.status = building.status || {};
+                building.status.isOpen = newOpenStatus;
+                building.status.lastStatusChange = this.gameTime;
+
+                // 处理营业状态变化
+                if (newOpenStatus) {
+                    this.handleBuildingOpening(building);
+                } else {
+                    this.handleBuildingClosing(building);
+                }
+
+                // 记录状态变化
+                console.log(`建筑物 ${building.name} 状态变化:`, {
+                    时间: this.gameTime.toLocaleTimeString(),
+                    状态: newOpenStatus ? '开始营业' : '停止营业',
+                    时间表: schedule
+                });
+            }
+        });
+    }
+
+    handleBuildingOpening(building) {
+        // 重置建筑物状态
+        building.currentOccupancy = 0;
+        building.status.services = this.initializeBuildingServices(building);
+        
+        // 通知相关代理
+        this.notifyNearbyAgents(building, 'building_open');
+    }
+
+    handleBuildingClosing(building) {
+        // 请求所有在建筑物内的代理离开
+        const occupants = this.getAgentsInBuilding(building.id);
+        occupants.forEach(agent => {
+            agent.handleBuildingClosing(building);
+        });
+        
+        // 清理建筑物状态
+        building.currentOccupancy = 0;
+        building.status.services = {};
+        
+        // 通知相关代理
+        this.notifyNearbyAgents(building, 'building_close');
+    }
+
+    checkScheduledActivities() {
+        const currentHour = this.gameTime.getHours();
+        const currentMinute = this.gameTime.getMinutes();
+
+        this.agents.forEach(agent => {
+            // 获取当前时段的计划活动
+            const timeSlot = this.getTimeSlot(currentHour);
+            const schedule = agent.behavior?.dailySchedule?.[timeSlot];
+
+            if (schedule) {
+                schedule.forEach(activity => {
+                    const [activityHour, activityMinute] = activity.time.split(':').map(Number);
+                    
+                    // 检查是否到达活动时间
+                    if (currentHour === activityHour && 
+                        Math.abs(currentMinute - activityMinute) <= 5) {
+                        
+                        // 通知代理执行计划活动
+                        agent.handleScheduledActivity(activity);
+                    }
+                });
+            }
+        });
+    }
+
+    getTimeSlot(hour) {
+        if (hour >= 6 && hour < 12) return 'morning';
+        if (hour >= 12 && hour < 18) return 'afternoon';
+        if (hour >= 18 && hour < 22) return 'evening';
+        return 'night';
+    }
+
+    getHoursOpen(building) {
+        // 如果建筑物24小时营业
+        if (building.schedule?.open === 0 && building.schedule?.close === 24) {
+            return 24;
+        }
+
+        // 获取当前游戏时间的小时数
+        const currentHour = this.gameTime.getHours();
+        
+        // 获取建筑物的营业时间表
+        const schedule = building.schedule || { open: 9, close: 18 };
+        
+        // 如果建筑物跨日营业（例如22:00-次日6:00）
+        if (schedule.close < schedule.open) {
+            if (currentHour >= schedule.open) {
+                return currentHour - schedule.open;
+            } else {
+                return (24 - schedule.open) + currentHour;
+            }
+        } else {
+            // 普通营业时间（例如9:00-18:00）
+            if (currentHour >= schedule.open && currentHour < schedule.close) {
+                return currentHour - schedule.open;
+            }
+        }
+
+        // 如果当前是休息时间
+        return 0;
+    }
+
+    getBuildingServices(building) {
+        // 根据建筑类型返回可用服务列表
+        const serviceMap = {
+            residential: ['rest', 'shelter'],
+            commercial: {
+                restaurant: ['food', 'socialize'],
+                cafe: ['food', 'socialize', 'work'],
+                shop: ['shopping'],
+                office: ['work']
+            },
+            park: ['recreation', 'socialize', 'exercise'],
+            plaza: ['socialize', 'relax'],
+            recreation: ['entertainment', 'socialize', 'relax'],
+            education: ['education', 'socialize'],
+            healthcare: ['healthcare'],
+            entertainment: ['entertainment', 'socialize']
+        };
+
+        // 获取基础服务
+        let services = serviceMap[building.type] || [];
+
+        // 如果是商业建筑，检查子类型
+        if (building.type === 'commercial' && building.subType) {
+            services = serviceMap.commercial[building.subType] || services;
+        }
+
+        // 如果建筑物有自定义服务，使用自定义服务
+        if (building.services && Array.isArray(building.services)) {
+            services = building.services;
+        }
+
+        // 确保返回数组
+        return Array.isArray(services) ? services : [];
+    }
+
+    getServiceCapacity(building, service) {
+        // 根据服务类型返回容量
+        const baseCapacity = building.capacity || 100;
+        
+        const serviceCapacityRatio = {
+            rest: 1.0,        // 休息设施使用全部容量
+            food: 0.8,        // 餐饮设施使用80%容量
+            socialize: 0.6,   // 社交空间使用60%容量
+            work: 0.7,        // 工作空间使用70%容量
+            exercise: 0.5,    // 运动设施使用50%容量
+            entertainment: 0.6 // 娱乐设施使用60%容量
+        };
+
+        return Math.floor(baseCapacity * (serviceCapacityRatio[service] || 0.5));
+    }
+
+    getServiceCurrentLoad(building, service) {
+        // 获取当前服务的使用人数
+        const agents = this.getAgentsInBuilding(building.id);
+        return agents.filter(agent => 
+            agent.behaviorControl?.currentAction === service
+        ).length;
     }
 } 
