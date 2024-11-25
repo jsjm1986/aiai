@@ -1,5 +1,10 @@
 # AI虚拟城市 (AI Virtual City)
-
+![版本](https://img.shields.io/badge/版本-1.0.0_Beta-blue)
+![许可证](https://img.shields.io/badge/许可证-MIT-green)
+![状态](https://img.shields.io/badge/状态-开发中-orange)
+![贡献者](https://img.shields.io/github/contributors/jsjm1986/aiai)
+![Stars](https://img.shields.io/github/stars/jsjm1986/aiai)
+![Forks](https://img.shields.io/github/forks/jsjm1986/aiai)
 一个基于大语言模型的虚拟城市模拟系统，通过AI代理模拟城市居民的日常生活、社交互动和决策行为。
 
 ## 主要特点
