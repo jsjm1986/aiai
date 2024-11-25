@@ -5,6 +5,8 @@
 ![贡献者](https://img.shields.io/github/contributors/jsjm1986/aiai)
 ![Stars](https://img.shields.io/github/stars/jsjm1986/aiai)
 ![Forks](https://img.shields.io/github/forks/jsjm1986/aiai)
+
+
 一个基于大语言模型的虚拟城市模拟系统，通过AI代理模拟城市居民的日常生活、社交互动和决策行为。
 
 ## 主要特点
