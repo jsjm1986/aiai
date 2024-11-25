@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI虚拟城市</title>
+    <link rel="stylesheet" href="css/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div id="init-container" class="init-container">
+        <div class="init-panel">
+            <h1>AI虚拟城市</h1>
+            <div class="input-group">
+                <label for="model-select">选择大模型:</label>
+                <select id="model-select" class="model-select">
+                    <option value="deepseek">DeepSeek</option>
+                    <option value="openai">OpenAI</option>
+                    <option value="anthropic">Anthropic</option>
+                    <option value="step">阶跃星辰</option>
+                </select>
+            </div>
+            <div class="input-group">
+                <label for="model-version">选择模型版本:</label>
+                <select id="model-version" class="model-select">
+                    <!-- 将根据选择的大模型动态填充 -->
+                </select>
+                <div class="input-hint model-info">
+                    当前选择: <span id="current-model">DeepSeek</span> - 
+                    <span id="current-version">deepseek-chat</span>
+                </div>
+            </div>
+            <div class="input-group">
+                <label for="api-key">API Key:</label>
+                <input type="password" id="api-key" placeholder="请输入您的API Key">
+                <div class="input-hint api-hint">
+                    当前选择: <span id="current-model">DeepSeek</span>
+                </div>
+            </div>
+            <div class="input-group">
+                <label for="population-size">城市人口规模:</label>
+                <input type="number" id="population-size" 
+                    min="1" 
+                    max="10000" 
+                    value="1" 
+                    placeholder="请输入人口数量（1-10000）">
+                <div class="input-hint">推荐范围：1-10000人</div>
+            </div>
+            <button id="start-btn" class="start-btn">开始初始化</button>
+            <div id="init-status" class="init-status"></div>
+        </div>
+    </div>
+
+    <div id="city-container" class="hidden">
+        <canvas id="city-canvas"></canvas>
+    </div>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="js/config.js"></script>
+    <script src="js/behaviorSystem.js"></script>
+    <script src="js/pathFinder.js"></script>
+    <script src="js/aiService.js"></script>
+    <script src="js/agent.js"></script>
+    <script src="js/uiManager.js"></script>
+    <script src="js/loadingManager.js"></script>
+    <script src="js/city.js"></script>
+    <script src="js/main.js"></script>
+
+    <div id="system-panel" class="system-panel">
+        <div class="system-panel-header">
+            <h2>系统信息面板</h2>
+        </div>
+
+        <div class="system-info-section">
+            <div class="system-info-title">基础信息</div>
+            <div class="system-stats">
+                <div class="stat-item">
+                    <div class="stat-label">总人口</div>
+                    <div class="stat-value" id="total-population">0</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">活跃人数</div>
+                    <div class="stat-value" id="active-agents">0</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">游戏时间</div>
+                    <div class="stat-value" id="game-time">00:00:00</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">系统状态</div>
+                    <div class="stat-value" id="system-status">系统运行正常</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="system-info-section">
+            <div class="system-info-title">城市统计</div>
+            <div class="system-stats">
+                <div class="stat-item">
+                    <div class="stat-label">建筑数量</div>
+                    <div class="stat-value" id="building-count">0</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">道路长度</div>
+                    <div class="stat-value" id="road-length">0</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">区域数量</div>
+                    <div class="stat-value" id="district-count">0</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">建筑使用率</div>
+                    <div class="stat-value" id="building-usage">0%</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="system-info-section">
+            <div class="system-info-title">AI系统</div>
+            <div class="system-stats">
+                <div class="stat-item">
+                    <div class="stat-label">当前模型</div>
+                    <div class="stat-value" id="current-model-info">-</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">模型版本</div>
+                    <div class="stat-value" id="current-version-info">-</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">API调用次数</div>
+                    <div class="stat-value" id="api-calls">0</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">Token用量</div>
+                    <div class="stat-value" id="token-usage">0</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="system-info-section">
+            <div class="system-info-title">居民活动</div>
+            <div class="system-stats">
+                <div class="stat-item">
+                    <div class="stat-label">工作中</div>
+                    <div class="stat-value" id="working-agents">0</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">休息中</div>
+                    <div class="stat-value" id="resting-agents">0</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">社交中</div>
+                    <div class="stat-value" id="socializing-agents">0</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">移动中</div>
+                    <div class="stat-value" id="moving-agents">0</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="system-info-section">
+            <div class="system-info-title">最近事件</div>
+            <div class="system-info-content" id="recent-events">
+                <!-- 最近事件将在这里动态更新 -->
+            </div>
+        </div>
+
+        <div class="system-info-section">
+            <div class="system-info-title">AI代理列表</div>
+            <div class="agent-list" id="agent-list">
+                <!-- AI代理列表将在这里动态更新 -->
+            </div>
+        </div>
+
+        <div class="system-info-section">
+            <div class="system-info-title">建筑服务状态</div>
+            <div class="building-services" id="building-services">
+                <div class="service-category">
+                    <div class="service-title">生理需求服务</div>
+                    <div class="service-stats">
+                        <div class="stat-item">
+                            <div class="stat-label">休息设施</div>
+                            <div class="stat-value" id="rest-facilities">0/0</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-label">餐饮设施</div>
+                            <div class="stat-value" id="food-facilities">0/0</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="service-category">
+                    <div class="service-title">社交娱乐服务</div>
+                    <div class="service-stats">
+                        <div class="stat-item">
+                            <div class="stat-label">社交场所</div>
+                            <div class="stat-value" id="social-facilities">0/0</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-label">娱乐设施</div>
+                            <div class="stat-value" id="entertainment-facilities">0/0</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="service-category">
+                    <div class="service-title">工作学习服务</div>
+                    <div class="service-stats">
+                        <div class="stat-item">
+                            <div class="stat-label">工作场所</div>
+                            <div class="stat-value" id="work-facilities">0/0</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-label">教育设施</div>
+                            <div class="stat-value" id="education-facilities">0/0</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="agent-modal" class="agent-modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>代理详情</h2>
+                <span class="close-modal" onclick="document.getElementById('agent-modal').style.display='none'">&times;</span>
+            </div>
+            <div class="modal-body" id="agent-detail">
+                <!-- 代理详细信息将在这里显示 -->
+            </div>
+        </div>
+    </div>
+</body>
+</html> 

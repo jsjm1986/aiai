@@ -1,0 +1,11 @@
+ai-virtual-city/
+├── index.html
+├── css/
+│   └── style.css
+├── js/
+│   ├── main.js
+│   ├── city.js
+│   ├── agent.js
+│   └── aiService.js
+└── assets/
+    └── models/ 
